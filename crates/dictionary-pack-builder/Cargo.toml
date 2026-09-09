@@ -1,0 +1,30 @@
+[package]
+name = "elephant-ladder-dictionary-pack-builder"
+description = "Builder and qualification tools for Elephant Ladder dictionary packs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "elephant-dictionary-pack"
+path = "src/main.rs"
+
+[dependencies]
+elephant-ladder-dictionary-pack = { path = "../dictionary-pack" }
+hex.workspace = true
+rusqlite.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+tempfile = "3.22.0"
+
+[lints]
+workspace = true

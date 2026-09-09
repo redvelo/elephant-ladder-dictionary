@@ -1,0 +1,11 @@
+/target/
+*.eldict
+*.eldict-journal
+*.eldict-shm
+*.eldict-wal
+*.jsonl
+*.jsonl.gz
+!tests/fixtures/**/*.jsonl
+!tests/fixtures/**/*.jsonl.gz
+/.idea/
+/.vscode/
