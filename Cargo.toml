@@ -14,15 +14,23 @@ repository = "https://github.com/redvelo/elephant-ladder-dictionary"
 
 [workspace.dependencies]
 arc-swap = "1.7.1"
+ed25519-dalek = "2.2.0"
+getrandom = "0.3.4"
 hex = "0.4.3"
+ogg = "0.9.2"
+opus = "0.4.0"
+rubato = "0.16.2"
 icu_casemap = "2.3.0"
 icu_normalizer = "2.3.0"
 rusqlite = { version = "0.37.0", features = ["bundled", "limits"] }
 rustix = { version = "1.0.8", features = ["fs"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"
+sha1 = "0.10.6"
 sha2 = "0.10.9"
+symphonia = { version = "0.6.1", default-features = false, features = ["adpcm", "flac", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 thiserror = "2.0.18"
+ureq = "3.4.1"
 zstd = "0.13.3"
 
 [workspace.lints.rust]

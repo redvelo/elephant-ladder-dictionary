@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "fixture": {
+    "file": "zhwiktionary-20260901.jsonl",
+    "sha256": "94ebb56a2d125b4bbf3353ab0aa2049d995dd5755364733edef330ffde686502",
+    "size_bytes": 180472,
+    "line_count": 4,
+    "line_ending": "LF",
+    "terminal_lf": true
+  },
+  "source": {
+    "wiktionary_edition": "zhwiktionary",
+    "selected_entry_language": "zh",
+    "dump_date": "2026-09-01",
+    "raw_extraction": {
+      "started_date": "2026-09-08",
+      "url": "https://kaikki.org/dictionary/downloads/zh/zh-extract.jsonl.gz",
+      "info_page": "https://kaikki.org/zhwiktionary/rawdata.html",
+      "compressed_sha256": "abf9e40ef7bf9a9c821bbba83de5408bb58ea1134a68fafec2306d3c9cefa36e",
+      "uncompressed_sha256": "5fae45e1f36e9b0eb21b09a393366116692ecf62b690185e6f4a54f62905b9b1",
+      "uncompressed_line_count": 2950142,
+      "uncompressed_size_bytes": 1981725810
+    },
+    "extraction_log": {
+      "url": "https://kaikki.org/dictionary/downloads/zh/zh-extract.log",
+      "sha256": "62c2f396e5c06416c0e3a06a360de46b1162dfe1a3375b28406dd2eb6a8bd6c4"
+    },
+    "wiktextract_commit": null,
+    "wiktextract_commit_note": "The extraction log does not record the Wiktextract revision, and the information page already describes a later extraction."
+  },
+  "selection": {
+    "policy": "Copy the listed raw JSON lines byte-for-byte in source order with LF delimiters and no reserialization."
+  },
+  "records": [
+    {
+      "fixture_line": 1,
+      "source_line": 135584,
+      "source_byte_offset": 113955926,
+      "word": "貓",
+      "language_code": "zh",
+      "part_of_speech": "unknown",
+      "record_sha256_excluding_lf": "de093c1a10518466bcbab9247014a8e17a37f356e04a825956326e90638fcdab",
+      "source_page": "https://zh.wiktionary.org/wiki/%E8%B2%93",
+      "rationale": [
+        "very large entry",
+        "traditional headword",
+        "audio references",
+        "descendants",
+        "examples with emphasis"
+      ]
+    },
+    {
+      "fixture_line": 2,
+      "source_line": 912369,
+      "source_byte_offset": 651786311,
+      "word": "梯子",
+      "language_code": "zh",
+      "part_of_speech": "noun",
+      "record_sha256_excluding_lf": "19761056455a16d37fd8db1967ab4c07c2dfe866bfc1a4bde289a4f836ee8a05",
+      "source_page": "https://zh.wiktionary.org/wiki/%E6%A2%AF%E5%AD%90",
+      "rationale": [
+        "ruby",
+        "descendants",
+        "synonyms"
+      ]
+    },
+    {
+      "fixture_line": 3,
+      "source_line": 987970,
+      "source_byte_offset": 796745323,
+      "word": "猫",
+      "language_code": "zh",
+      "part_of_speech": "unknown",
+      "record_sha256_excluding_lf": "882c1fc327507ee3871403c38a1973866ff692cec5288e2083c022c9a321eca4",
+      "source_page": "https://zh.wiktionary.org/wiki/%E7%8C%AB",
+      "rationale": [
+        "simplified variant headword",
+        "variant note"
+      ]
+    },
+    {
+      "fixture_line": 4,
+      "source_line": 1288320,
+      "source_byte_offset": 1010174250,
+      "word": "電子書",
+      "language_code": "zh",
+      "part_of_speech": "noun",
+      "record_sha256_excluding_lf": "fb7cb76d1eb298a4808be588880cb95a91ce0039f1dbcf28395f9d7cc914b724",
+      "source_page": "https://zh.wiktionary.org/wiki/%E9%9B%BB%E5%AD%90%E6%9B%B8",
+      "rationale": [
+        "e-reading terminology",
+        "simplified form",
+        "legacy zh_pron pronunciations"
+      ]
+    }
+  ],
+  "licensing": {
+    "scope": "The fixture records remain third-party Wiktionary content under the Wiktionary and Kaikki terms stated by the recorded source information page; the project code license does not cover them.",
+    "wiktionary_copyright": "https://zh.wiktionary.org/wiki/Wiktionary:版權信息",
+    "licenses": [
+      {
+        "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+        "spdx": "CC-BY-SA-4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0/"
+      },
+      {
+        "name": "GNU Free Documentation License 1.3",
+        "spdx": "GFDL-1.3-only",
+        "url": "https://www.gnu.org/licenses/fdl-1.3.html"
+      }
+    ]
+  },
+  "retrieved_and_verified_date": "2026-09-16"
+}

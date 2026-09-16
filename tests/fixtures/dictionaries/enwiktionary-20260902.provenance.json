@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "fixture": {
+    "file": "enwiktionary-20260902.jsonl",
+    "sha256": "729414246e092e9150f117b29ed83bc3e32feeea564b3b6be84dfcbd88cd53e5",
+    "size_bytes": 244129,
+    "line_count": 4,
+    "line_ending": "LF",
+    "terminal_lf": true
+  },
+  "source": {
+    "wiktionary_edition": "enwiktionary",
+    "selected_entry_language": "en",
+    "dump_date": "2026-09-02",
+    "raw_extraction": {
+      "completed_date": "2026-09-09",
+      "url": "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz",
+      "info_page": "https://kaikki.org/dictionary/rawdata.html",
+      "compressed_sha256": "42e0bfe1669513cb89bd0a12f2e85d1a8f4ebedc70c65ec88c9509d0f5d392f9",
+      "uncompressed_sha256": "159652215c798e35b961a8c251037ec8f132e19b6445f211f207030fcd3dcae4",
+      "uncompressed_line_count": 10913996,
+      "uncompressed_size_bytes": 24782738840
+    },
+    "wiktextract_commit_short": "ccec6f1",
+    "wikitextprocessor_commit_short": "4deed51",
+    "revision_note": "Short revisions as published on the information page on 2026-09-16; no extraction log is published for this edition."
+  },
+  "selection": {
+    "policy": "Copy the listed raw JSON lines byte-for-byte in source order with LF delimiters and no reserialization."
+  },
+  "records": [
+    {
+      "fixture_line": 1,
+      "source_line": 518,
+      "source_byte_offset": 2647141,
+      "word": "elephant",
+      "language_code": "en",
+      "part_of_speech": "noun",
+      "record_sha256_excluding_lf": "ce7ab7a292398ceaf2cf9a166ae9bbb5ce3c607c89be6a22e25da27d87f90a3a",
+      "source_page": "https://en.wiktionary.org/wiki/elephant",
+      "rationale": [
+        "translations to every launch target",
+        "audio reference",
+        "relations"
+      ]
+    },
+    {
+      "fixture_line": 2,
+      "source_line": 33973,
+      "source_byte_offset": 221873897,
+      "word": "run",
+      "language_code": "en",
+      "part_of_speech": "verb",
+      "record_sha256_excluding_lf": "18c3c36db13ced5948eb611e0c4df9d714c7a54305154a5ec3d8cd47e3302d65",
+      "source_page": "https://en.wiktionary.org/wiki/run",
+      "rationale": [
+        "very large entry",
+        "many senses",
+        "irregular inflected forms",
+        "examples with emphasis"
+      ]
+    },
+    {
+      "fixture_line": 3,
+      "source_line": 33997,
+      "source_byte_offset": 222136145,
+      "word": "ran",
+      "language_code": "en",
+      "part_of_speech": "verb",
+      "record_sha256_excluding_lf": "a6a844b733893c5ebeea10712eb31a2a1221e4056a5db04bc5c78799f90bbaff",
+      "source_page": "https://en.wiktionary.org/wiki/ran",
+      "rationale": [
+        "inflected form",
+        "form_of cross-reference",
+        "numbered etymology"
+      ]
+    },
+    {
+      "fixture_line": 4,
+      "source_line": 284479,
+      "source_byte_offset": 1346861525,
+      "word": "e-book",
+      "language_code": "en",
+      "part_of_speech": "noun",
+      "record_sha256_excluding_lf": "cb86891caed022b35b0446f44ee56e9e931a6559f1a83a5a499461e8c7891341",
+      "source_page": "https://en.wiktionary.org/wiki/e-book",
+      "rationale": [
+        "e-reading terminology",
+        "Lingua Libre audio file name normalization"
+      ]
+    }
+  ],
+  "licensing": {
+    "scope": "The fixture records remain third-party Wiktionary content under the Wiktionary and Kaikki terms stated by the recorded source information page; the project code license does not cover them.",
+    "wiktionary_copyright": "https://en.wiktionary.org/wiki/Wiktionary:Copyrights",
+    "licenses": [
+      {
+        "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+        "spdx": "CC-BY-SA-4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0/"
+      },
+      {
+        "name": "GNU Free Documentation License 1.3",
+        "spdx": "GFDL-1.3-only",
+        "url": "https://www.gnu.org/licenses/fdl-1.3.html"
+      }
+    ]
+  },
+  "retrieved_and_verified_date": "2026-09-16"
+}

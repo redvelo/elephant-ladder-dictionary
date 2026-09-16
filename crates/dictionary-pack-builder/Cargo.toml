@@ -14,13 +14,21 @@ path = "src/main.rs"
 
 [dependencies]
 elephant-ladder-dictionary-pack = { path = "../dictionary-pack" }
+ed25519-dalek.workspace = true
+getrandom.workspace = true
 hex.workspace = true
+ogg.workspace = true
+opus.workspace = true
+rubato.workspace = true
 rusqlite.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha1.workspace = true
 sha2.workspace = true
+symphonia.workspace = true
 thiserror.workspace = true
+ureq.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]

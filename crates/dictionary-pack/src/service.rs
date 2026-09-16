@@ -5,8 +5,8 @@ use arc_swap::ArcSwap;
 use thiserror::Error;
 
 use crate::{
-    DictionaryPack, LookupOptions, LookupOutcome, PackError, SnapshotRevision,
-    SnapshotViewIdentity, ViewType,
+    DictionaryPack, Entry, EntryReference, LookupOptions, LookupOutcome, PackError,
+    ProjectionOptions, Section, SectionPage, SnapshotRevision, SnapshotViewIdentity, ViewType,
 };
 
 /// One enabled monolingual pack view.
@@ -48,6 +48,36 @@ impl MonolingualView {
     /// Returns pack limit, storage, or record-authentication errors.
     pub fn lookup(&self, query: &str, options: LookupOptions) -> Result<LookupOutcome, PackError> {
         self.pack.lookup(query, options)
+    }
+
+    /// Reads one entry of this view.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`DictionaryPack::entry`].
+    pub fn entry(
+        &self,
+        reference: &EntryReference,
+        projection: ProjectionOptions,
+    ) -> Result<Entry, PackError> {
+        self.pack.entry(reference, projection)
+    }
+
+    /// Reads one section page of one entry of this view.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`DictionaryPack::section_page`].
+    pub fn section_page(
+        &self,
+        reference: &EntryReference,
+        section: Section,
+        offset: usize,
+        limit: usize,
+        projection: ProjectionOptions,
+    ) -> Result<SectionPage, PackError> {
+        self.pack
+            .section_page(reference, section, offset, limit, projection)
     }
 }
 
@@ -117,15 +147,50 @@ impl BilingualView {
             return Ok(BilingualLookupOutcome::NoEntry);
         }
         let has_translation = outcome.matches.iter().any(|matched| {
-            matched.entry.sections.iter().any(|section| {
-                section.kind == crate::SectionKind::Translations && section.available > 0
-            })
+            matched.entry.translations.total > 0 || matched.entry.sense_translation_total > 0
         });
         if has_translation {
             Ok(BilingualLookupOutcome::Translations(outcome))
         } else {
             Ok(BilingualLookupOutcome::NoTranslation(outcome))
         }
+    }
+
+    /// Reads one entry with translations filtered to the target language.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`DictionaryPack::entry`].
+    pub fn entry(
+        &self,
+        reference: &EntryReference,
+        projection: ProjectionOptions,
+    ) -> Result<Entry, PackError> {
+        self.pack
+            .entry_for_language(reference, projection, Some(&self.target_language))
+    }
+
+    /// Reads one section page with translations filtered to the target language.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`DictionaryPack::section_page`].
+    pub fn section_page(
+        &self,
+        reference: &EntryReference,
+        section: Section,
+        offset: usize,
+        limit: usize,
+        projection: ProjectionOptions,
+    ) -> Result<SectionPage, PackError> {
+        self.pack.section_page_for_language(
+            reference,
+            section,
+            offset,
+            limit,
+            projection,
+            Some(&self.target_language),
+        )
     }
 }
 
@@ -153,6 +218,84 @@ impl DictionaryView {
         }
     }
 
+    #[must_use]
+    pub fn pack(&self) -> &Arc<DictionaryPack> {
+        match self {
+            Self::Monolingual(view) => view.pack(),
+            Self::Bilingual(view) => view.pack(),
+        }
+    }
+
+    /// The target language of a bilingual view.
+    #[must_use]
+    pub fn target_language(&self) -> Option<&str> {
+        match self {
+            Self::Monolingual(_) => None,
+            Self::Bilingual(view) => Some(view.target_language()),
+        }
+    }
+
+    /// Performs an exact lookup in this view.
+    #[must_use]
+    pub fn lookup(&self, query: &str, options: LookupOptions) -> ViewOutcome {
+        match self {
+            Self::Monolingual(view) => match view.lookup(query, options) {
+                Ok(outcome) if outcome.is_empty() => ViewOutcome::NoEntry,
+                Ok(outcome) => ViewOutcome::Completed(outcome),
+                Err(error) => ViewOutcome::Failed(error),
+            },
+            Self::Bilingual(view) => match view.lookup(query, options) {
+                Ok(BilingualLookupOutcome::NoEntry) => ViewOutcome::NoEntry,
+                Ok(BilingualLookupOutcome::NoTranslation(outcome)) => {
+                    ViewOutcome::NoTranslation(outcome)
+                }
+                Ok(BilingualLookupOutcome::Translations(outcome)) => {
+                    ViewOutcome::Completed(outcome)
+                }
+                Err(error) => ViewOutcome::Failed(error),
+            },
+        }
+    }
+
+    /// Reads one entry of this view.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`DictionaryPack::entry`].
+    pub fn entry(
+        &self,
+        reference: &EntryReference,
+        projection: ProjectionOptions,
+    ) -> Result<Entry, PackError> {
+        match self {
+            Self::Monolingual(view) => view.entry(reference, projection),
+            Self::Bilingual(view) => view.entry(reference, projection),
+        }
+    }
+
+    /// Reads one section page of one entry of this view.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`DictionaryPack::section_page`].
+    pub fn section_page(
+        &self,
+        reference: &EntryReference,
+        section: Section,
+        offset: usize,
+        limit: usize,
+        projection: ProjectionOptions,
+    ) -> Result<SectionPage, PackError> {
+        match self {
+            Self::Monolingual(view) => {
+                view.section_page(reference, section, offset, limit, projection)
+            }
+            Self::Bilingual(view) => {
+                view.section_page(reference, section, offset, limit, projection)
+            }
+        }
+    }
+
     fn identity(&self) -> SnapshotViewIdentity<'_> {
         match self {
             Self::Monolingual(view) => SnapshotViewIdentity {
@@ -171,6 +314,23 @@ impl DictionaryView {
             },
         }
     }
+}
+
+/// The outcome of one view in a snapshot lookup.
+#[derive(Debug)]
+pub enum ViewOutcome {
+    Completed(LookupOutcome),
+    NoEntry,
+    /// Entries matched, but none has a translation into the view's target language.
+    NoTranslation(LookupOutcome),
+    Failed(PackError),
+}
+
+/// One view and its lookup outcome.
+#[derive(Debug)]
+pub struct ViewLookup<'a> {
+    pub view_id: &'a str,
+    pub outcome: ViewOutcome,
 }
 
 /// An immutable, ordered leaseable dictionary configuration.
@@ -215,7 +375,49 @@ impl DictionarySnapshot {
     pub fn view(&self, view_id: &str) -> Option<&DictionaryView> {
         self.views.iter().find(|view| view.view_id() == view_id)
     }
+
+    /// Looks up `query` in every view.
+    ///
+    /// Views whose corpus language shares the primary subtag of `language` come
+    /// first; configured order is kept within each group. A failed view does not
+    /// affect other views.
+    #[must_use]
+    pub fn lookup(
+        &self,
+        query: &str,
+        language: Option<&str>,
+        options: LookupOptions,
+    ) -> Vec<ViewLookup<'_>> {
+        let hint = language.map(primary_subtag).filter(|hint| !hint.is_empty());
+        let matches_hint = |view: &&DictionaryView| {
+            hint.as_deref()
+                .is_some_and(|hint| primary_subtag(view.pack().corpus_language()) == hint)
+        };
+        let (preferred, others): (Vec<_>, Vec<_>) = self.views.iter().partition(matches_hint);
+        preferred
+            .into_iter()
+            .chain(others)
+            .map(|view| ViewLookup {
+                view_id: view.view_id(),
+                outcome: view.lookup(query, options),
+            })
+            .collect()
+    }
 }
+
+fn primary_subtag(tag: &str) -> String {
+    tag.split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<DictionaryPack>();
+    assert_send_sync::<DictionarySnapshot>();
+    assert_send_sync::<DictionaryService>();
+};
 
 /// Atomic owner of the current immutable dictionary snapshot.
 pub struct DictionaryService {

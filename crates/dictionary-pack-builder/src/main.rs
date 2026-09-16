@@ -2,17 +2,24 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use elephant_ladder_dictionary_pack::{
-    DATA_APPLICATION_ID, DictionaryPack, FORMAT_VERSION, INDEX_APPLICATION_ID, PackLimits,
-    UNICODE_PROFILE,
+    AUDIO_MANIFEST_FILE, AudioCollection, AudioManifest, DATA_APPLICATION_ID, DictionaryPack,
+    ExpectedPack, FORMAT_VERSION, INDEX_APPLICATION_ID, PackError, PackLimits, PackRevision,
+    Sha256Hex, UNICODE_PROFILE,
 };
-use elephant_ladder_dictionary_pack_builder::{BuildManifest, BuildOptions, build_pack};
+use elephant_ladder_dictionary_pack_builder::{
+    AcquireOptions, AcquisitionState, AudioBuildOptions, BuildManifest, BuildOptions,
+    CatalogConfig, EditionConfig, MAX_RECORDING_SECONDS, ReferenceSet, SourceSnapshot, acquire,
+    assemble_catalog, build_audio_collection, build_manifest, build_pack, generate_signing_key,
+    read_signing_key, sign_catalog, transcode_to_opus, utc_now, validate_snapshot,
+};
+use sha2::{Digest, Sha256};
 
 const PROGRESS_INTERVAL_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -104,26 +111,19 @@ fn run() -> Result<(), String> {
         if flag != "--pack" || arguments.next().is_some() {
             return Err(usage(&program));
         }
-        let directory = PathBuf::from(directory);
-        let started_at = Instant::now();
-        eprintln!("validation started: pack={}", directory.display());
-        let pack = DictionaryPack::open(directory, PackLimits::default())
-            .map_err(|error| error.to_string())?;
-        let report = pack.validate_all().map_err(|error| error.to_string())?;
-        eprintln!(
-            "validation completed: elapsed_seconds={:.1}",
-            started_at.elapsed().as_secs_f64()
-        );
-        println!(
-            "authenticated_record_count={}",
-            report.authenticated_record_count
-        );
-        println!(
-            "uncompressed_record_bytes={}",
-            report.uncompressed_record_bytes
-        );
-        println!("lookup_key_row_count={}", report.lookup_key_row_count);
-        return Ok(());
+        return run_validate(PathBuf::from(directory));
+    }
+    if command == "audio" {
+        let arguments = arguments.collect::<Vec<_>>();
+        return run_audio(&program, &arguments);
+    }
+    if command == "source" {
+        let arguments = arguments.collect::<Vec<_>>();
+        return run_source(&program, &arguments);
+    }
+    if command == "catalog" {
+        let arguments = arguments.collect::<Vec<_>>();
+        return run_catalog(&program, &arguments);
     }
     if command != "build" {
         return Err(usage(&program));
@@ -183,6 +183,220 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+fn run_validate(directory: PathBuf) -> Result<(), String> {
+    let started_at = Instant::now();
+    eprintln!("validation started: pack={}", directory.display());
+    let pack = DictionaryPack::open(directory, PackLimits::default())
+        .map_err(|error| error.to_string())?;
+    let report = pack.validate_all().map_err(|error| error.to_string())?;
+    eprintln!(
+        "validation completed: elapsed_seconds={:.1}",
+        started_at.elapsed().as_secs_f64()
+    );
+    println!(
+        "authenticated_record_count={}",
+        report.authenticated_record_count
+    );
+    println!(
+        "uncompressed_record_bytes={}",
+        report.uncompressed_record_bytes
+    );
+    println!("lookup_key_row_count={}", report.lookup_key_row_count);
+    Ok(())
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
+    let file = File::open(path).map_err(|error| format!("cannot open {path}: {error}"))?;
+    serde_json::from_reader(file).map_err(|error| format!("invalid JSON in {path}: {error}"))
+}
+
+fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), String> {
+    let arguments = arguments
+        .iter()
+        .map(|argument| argument.to_str().ok_or_else(|| usage(program)))
+        .collect::<Result<Vec<_>, _>>()?;
+    match arguments.as_slice() {
+        ["references", "--pack", pack, "--output", output] => audio_references(pack, output),
+        [
+            "acquire",
+            "--references",
+            references,
+            "--state",
+            state,
+            "--user-agent",
+            agent,
+        ] => {
+            let references: ReferenceSet = read_json(references)?;
+            let state = AcquisitionState::open_or_create(Path::new(state), &references, &utc_now())
+                .map_err(|error| error.to_string())?;
+            let report = acquire(&state, &AcquireOptions::commons((*agent).to_owned()))
+                .map_err(|error| error.to_string())?;
+            for (phase, count) in report.phases {
+                println!("{phase}={count}");
+            }
+            println!("completed={}", report.completed);
+            Ok(())
+        }
+        [
+            "build",
+            "--state",
+            state,
+            "--edition",
+            edition,
+            "--builder-revision",
+            revision,
+            "--output",
+            output,
+        ] => {
+            let edition: EditionConfig = read_json(edition)?;
+            let audio = edition
+                .audio
+                .ok_or_else(|| "edition has no audio configuration".to_owned())?;
+            let state =
+                AcquisitionState::open(Path::new(state)).map_err(|error| error.to_string())?;
+            let options = AudioBuildOptions {
+                builder_revision: (*revision).to_owned(),
+                minimum_app_version: edition.minimum_app_version,
+                workers: std::thread::available_parallelism().map_or(1, usize::from),
+            };
+            let result = build_audio_collection(&state, &audio, &options, Path::new(output))
+                .map_err(|error| error.to_string())?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).map_err(|error| error.to_string())?
+            );
+            Ok(())
+        }
+        ["validate", "--collection", collection] => {
+            let directory = Path::new(collection);
+            let manifest_bytes = std::fs::read(directory.join(AUDIO_MANIFEST_FILE))
+                .map_err(|error| format!("cannot read audio manifest: {error}"))?;
+            let manifest: AudioManifest = serde_json::from_slice(&manifest_bytes)
+                .map_err(|error| format!("invalid audio manifest: {error}"))?;
+            let expected = ExpectedPack {
+                pack_id: manifest
+                    .pack_id
+                    .parse()
+                    .map_err(|error: PackError| error.to_string())?,
+                pack_revision: PackRevision::from_bytes(*manifest.pack_revision.as_bytes()),
+                manifest_sha256: Sha256Hex::from_bytes(Sha256::digest(&manifest_bytes).into()),
+            };
+            let collection = AudioCollection::verify(directory, &expected, PackLimits::default())
+                .map_err(|error| error.to_string())?;
+            let report = collection
+                .validate_all()
+                .map_err(|error| error.to_string())?;
+            println!("recording_count={}", report.recording_count);
+            println!("available_count={}", report.available_count);
+            println!("blob_count={}", report.blob_count);
+            println!("blob_bytes={}", report.blob_bytes);
+            Ok(())
+        }
+        ["transcode", "--input", input, "--output", output] => {
+            let source =
+                std::fs::read(input).map_err(|error| format!("cannot read {input}: {error}"))?;
+            let transcoded = transcode_to_opus(&source, 1, MAX_RECORDING_SECONDS)
+                .map_err(|error| error.to_string())?;
+            std::fs::write(output, &transcoded.bytes)
+                .map_err(|error| format!("cannot write {output}: {error}"))?;
+            println!("bytes={}", transcoded.bytes.len());
+            println!("duration_ms={}", transcoded.duration_ms);
+            Ok(())
+        }
+        _ => Err(usage(program)),
+    }
+}
+
+fn audio_references(pack: &str, output: &str) -> Result<(), String> {
+    let pack =
+        DictionaryPack::open(pack, PackLimits::default()).map_err(|error| error.to_string())?;
+    let references = pack.audio_references().map_err(|error| error.to_string())?;
+    let set = ReferenceSet {
+        schema_version: 1,
+        corpus_pack_id: pack.pack_id().as_str().to_owned(),
+        corpus_revision: Sha256Hex::from_bytes(*pack.pack_revision().as_bytes()),
+        corpus_language: pack.corpus_language().to_owned(),
+        files: references.files.into_iter().collect(),
+        invalid: references.invalid.into_iter().collect(),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&set).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    std::fs::write(output, bytes).map_err(|error| format!("cannot write {output}: {error}"))?;
+    println!("files={}", set.files.len());
+    println!("invalid={}", set.invalid.len());
+    Ok(())
+}
+
+fn run_source(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), String> {
+    let arguments = arguments
+        .iter()
+        .map(|argument| argument.to_str().ok_or_else(|| usage(program)))
+        .collect::<Result<Vec<_>, _>>()?;
+    match arguments.as_slice() {
+        ["validate", "--edition", edition, "--snapshot", snapshot] => {
+            let edition: EditionConfig = read_json(edition)?;
+            let snapshot: SourceSnapshot = read_json(snapshot)?;
+            validate_snapshot(&edition, &snapshot).map_err(|error| error.to_string())
+        }
+        [
+            "manifest",
+            "--edition",
+            edition,
+            "--snapshot",
+            snapshot,
+            "--builder-revision",
+            revision,
+        ] => {
+            let edition: EditionConfig = read_json(edition)?;
+            let snapshot: SourceSnapshot = read_json(snapshot)?;
+            let manifest =
+                build_manifest(&edition, &snapshot, revision).map_err(|error| error.to_string())?;
+            let json =
+                serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?;
+            println!("{json}");
+            Ok(())
+        }
+        _ => Err(usage(program)),
+    }
+}
+
+fn run_catalog(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), String> {
+    let arguments = arguments
+        .iter()
+        .map(|argument| argument.to_str().ok_or_else(|| usage(program)))
+        .collect::<Result<Vec<_>, _>>()?;
+    match arguments.as_slice() {
+        ["keygen", "--output", path] => {
+            let key = generate_signing_key(Path::new(path)).map_err(|error| error.to_string())?;
+            println!("public_key={}", hex::encode(key.verifying_key().to_bytes()));
+            Ok(())
+        }
+        ["assemble", "--config", config, "--output", output] => {
+            let config_path = Path::new(config);
+            let file = File::open(config_path)
+                .map_err(|error| format!("cannot open {config}: {error}"))?;
+            let config: CatalogConfig = serde_json::from_reader(file)
+                .map_err(|error| format!("invalid catalog config {config}: {error}"))?;
+            let catalog = assemble_catalog(
+                &config,
+                config_path.parent().unwrap_or_else(|| Path::new(".")),
+                Path::new(output),
+            )
+            .map_err(|error| error.to_string())?;
+            println!("catalog_revision={}", catalog.catalog_revision);
+            println!("packs={}", catalog.packs.len());
+            Ok(())
+        }
+        ["sign", "--release", release, "--key", key] => {
+            let key = read_signing_key(Path::new(key)).map_err(|error| error.to_string())?;
+            sign_catalog(Path::new(release), &key).map_err(|error| error.to_string())?;
+            println!("public_key={}", hex::encode(key.verifying_key().to_bytes()));
+            Ok(())
+        }
+        _ => Err(usage(program)),
+    }
+}
+
 fn print_format_version() {
     println!("format_version={FORMAT_VERSION}");
     println!("index_application_id={INDEX_APPLICATION_ID:#010x}");
@@ -192,9 +406,7 @@ fn print_format_version() {
 
 fn usage(program: &std::ffi::OsStr) -> String {
     format!(
-        "usage: {} format-version\n       {} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {} validate --pack DIRECTORY\n\n`--input -` reads decompressed JSONL from standard input.",
-        program.to_string_lossy(),
-        program.to_string_lossy(),
-        program.to_string_lossy()
+        "usage: {program} format-version\n       {program} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --user-agent AGENT\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} source manifest --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION\n       {program} catalog keygen --output SIGNING_KEY\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n       {program} catalog sign --release RELEASE_DIRECTORY --key SIGNING_KEY\n\n`--input -` reads decompressed JSONL from standard input.",
+        program = program.to_string_lossy(),
     )
 }

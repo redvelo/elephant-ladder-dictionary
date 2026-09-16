@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "retrieved_date": "2026-09-16",
+  "api": "https://commons.wikimedia.org/w/api.php",
+  "recordings": [
+    {
+      "file": "En-in-locative.opus",
+      "commons_title": "File:En-in-locative.opus",
+      "description_url": "https://commons.wikimedia.org/wiki/File:En-in-locative.opus",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/f/ff/En-in-locative.opus",
+      "sha1": "d2f8528f44015dde3f61e8bb112b8c0e7c5e77ea",
+      "sha256": "6f367579635d1b7aba0ea7209cd0ebc692ebfc9be52c95a0f379b83aaa0ec56a",
+      "timestamp": "2025-12-04T05:37:39Z",
+      "size_bytes": 4084,
+      "mime": "application/ogg",
+      "extmetadata": {
+        "Artist": "<a href=\"//commons.wikimedia.org/w/index.php?title=User:Jaiganesh.kumaran&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User:Jaiganesh.kumaran (page does not exist)\">Jaiganesh.kumaran</a>",
+        "LicenseShortName": "CC0",
+        "UsageTerms": "Creative Commons Zero, Public Domain Dedication",
+        "AttributionRequired": "false",
+        "LicenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+        "Restrictions": "",
+        "License": "cc0"
+      }
+    },
+    {
+      "file": "En-us-abate.oga",
+      "commons_title": "File:En-us-abate.oga",
+      "description_url": "https://commons.wikimedia.org/wiki/File:En-us-abate.oga",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/e/ed/En-us-abate.oga",
+      "sha1": "118a3c437bc7a887df77f4715d100840413872e5",
+      "sha256": "1535bdf77522f96df85cc478edc60138ba6d70e679c3a13d0ed2fbe3991d4147",
+      "timestamp": "2014-08-02T17:11:01Z",
+      "size_bytes": 10795,
+      "mime": "application/ogg",
+      "extmetadata": {
+        "Artist": "<a href=\"//commons.wikimedia.org/wiki/User:Romanophile\" title=\"User:Romanophile\">Romanophile</a>.",
+        "LicenseShortName": "CC0",
+        "UsageTerms": "Creative Commons Zero, Public Domain Dedication",
+        "AttributionRequired": "false",
+        "LicenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+        "Restrictions": "",
+        "License": "cc0"
+      }
+    },
+    {
+      "file": "En-us-modicum.mp3",
+      "commons_title": "File:En-us-modicum.mp3",
+      "description_url": "https://commons.wikimedia.org/wiki/File:En-us-modicum.mp3",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/6/68/En-us-modicum.mp3",
+      "sha1": "2732e60abf3c743d024615caad4f85080c37cd1e",
+      "sha256": "f0c6fde287caa98a7e3030a134ebbc31b1d3612183f9b3c63b7e120009301052",
+      "timestamp": "2020-08-03T04:17:47Z",
+      "size_bytes": 10656,
+      "mime": "audio/mpeg",
+      "extmetadata": {
+        "Artist": "<a href=\"//commons.wikimedia.org/wiki/User:Koavf\" title=\"User:Koavf\">Koavf</a>",
+        "LicenseShortName": "CC0",
+        "UsageTerms": "Creative Commons Zero, Public Domain Dedication",
+        "AttributionRequired": "false",
+        "LicenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+        "Restrictions": "",
+        "License": "cc0"
+      }
+    },
+    {
+      "file": "LL-Q150_fra-Antochkat-cubi.wav",
+      "commons_title": "File:LL-Q150 (fra)-Antochkat-cubi.wav",
+      "description_url": "https://commons.wikimedia.org/wiki/File:LL-Q150_(fra)-Antochkat-cubi.wav",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/c/c4/LL-Q150_%28fra%29-Antochkat-cubi.wav",
+      "sha1": "90aa6c081effdcf4dfdff2295ef481e9f66b0b2a",
+      "sha256": "c3e434c8413f726bedac300d86135d6740a7ddc3402aa4698dd7783e69bf4015",
+      "timestamp": "2025-05-16T14:44:36Z",
+      "size_bytes": 59948,
+      "mime": "audio/wav",
+      "extmetadata": {
+        "Artist": "<ul><li>Speaker: <a href=\"//lingualibre.org/wiki/Q1510058\" class=\"extiw\" title=\"lingualibre:Q1510058\">Antochkat</a></li>\n<li>Recorder: <a href=\"//commons.wikimedia.org/w/index.php?title=User:Antochkat&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User:Antochkat (page does not exist)\">Antochkat</a></li></ul>",
+        "LicenseShortName": "CC0",
+        "UsageTerms": "Creative Commons Zero, Public Domain Dedication",
+        "AttributionRequired": "false",
+        "LicenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+        "Restrictions": "",
+        "License": "cc0"
+      }
+    }
+  ]
+}

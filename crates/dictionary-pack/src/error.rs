@@ -24,6 +24,9 @@ pub enum PackError {
     /// Immutable bytes or redundant stored facts disagree.
     #[error("corrupt dictionary pack: {0}")]
     Corrupt(String),
+    /// An entry reference names no entry of this pack revision.
+    #[error("dictionary entry reference is not part of this pack revision")]
+    UnknownEntry,
     /// A caller-supplied operation exceeds configured runtime limits.
     #[error("dictionary pack limit exceeded: {0}")]
     Limit(String),

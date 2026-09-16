@@ -1,0 +1,129 @@
+name: Qualify Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: Committed source snapshot, such as sources/enwiktionary-20260902-42e0bfe16695.json
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualify-${{ inputs.snapshot }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      SNAPSHOT: ${{ inputs.snapshot }}
+      TOOL: ${{ github.workspace }}/target/release/elephant-dictionary-pack
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build qualification tool
+        run: cargo build --locked --release --bin elephant-dictionary-pack
+
+      - name: Resolve snapshot
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/qualification-evidence"
+          echo "EVIDENCE=$EVIDENCE" >> "$GITHUB_ENV"
+          [[ "$SNAPSHOT" =~ ^sources/[a-z0-9-]+\.json$ ]]
+          edition="$(jq -r .wiktionary_edition "$SNAPSHOT")"
+          [[ "$edition" =~ ^[a-z]+wiktionary$ ]]
+          edition_file="editions/$edition.json"
+          "$TOOL" source validate --edition "$edition_file" --snapshot "$SNAPSHOT"
+          mkdir -p "$EVIDENCE"
+          "$TOOL" source manifest --edition "$edition_file" --snapshot "$SNAPSHOT" \
+            --builder-revision "$GITHUB_SHA" > "$EVIDENCE/build-manifest.json"
+          cp "$SNAPSHOT" "$EVIDENCE/source-snapshot.json"
+          echo "pack_id=$(jq -r .pack_id "$edition_file")" >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify mirrored source
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$RUNNER_TEMP" > "$EVIDENCE/disk-before.txt"
+          mkdir "$RUNNER_TEMP/parts"
+          repository="$(jq -r .mirror.repository "$SNAPSHOT")"
+          tag="$(jq -r .mirror.release_tag "$SNAPSHOT")"
+          jq -r '.mirror.parts[].file_name' "$SNAPSHOT" | while read -r part; do
+            curl --fail --location --retry 5 --retry-all-errors \
+              --output "$RUNNER_TEMP/parts/$part" \
+              "https://github.com/$repository/releases/download/$tag/$part"
+          done
+          jq -r '.mirror.parts[] | "\(.sha256)  \(.file_name)"' "$SNAPSHOT" \
+            | (cd "$RUNNER_TEMP/parts" && sha256sum --check --strict)
+          jq -r '.mirror.parts[].file_name' "$SNAPSHOT" | while read -r part; do
+            cat "$RUNNER_TEMP/parts/$part"
+            rm "$RUNNER_TEMP/parts/$part"
+          done > "$RUNNER_TEMP/source.jsonl.gz"
+          printf '%s  %s\n' "$(jq -r .compressed.sha256 "$SNAPSHOT")" \
+            "$RUNNER_TEMP/source.jsonl.gz" | sha256sum --check --strict
+
+      - name: Build candidate A
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time --verbose --output="$EVIDENCE/build-a.time" \
+            bash -o pipefail -c 'gzip -dc "$1" | "$2" build --manifest "$3" --input - --output "$4"' \
+            _ "$RUNNER_TEMP/source.jsonl.gz" "$TOOL" "$EVIDENCE/build-manifest.json" \
+            "$RUNNER_TEMP/candidate-a"
+
+      - name: Validate candidate A
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time --verbose --output="$EVIDENCE/validate-a.time" \
+            "$TOOL" validate --pack "$RUNNER_TEMP/candidate-a" | tee "$EVIDENCE/validation.txt"
+
+      - name: Build candidate B
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time --verbose --output="$EVIDENCE/build-b.time" \
+            bash -o pipefail -c 'gzip -dc "$1" | "$2" build --manifest "$3" --input - --output "$4"' \
+            _ "$RUNNER_TEMP/source.jsonl.gz" "$TOOL" "$EVIDENCE/build-manifest.json" \
+            "$RUNNER_TEMP/candidate-b"
+
+      - name: Compare candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          diff -r "$RUNNER_TEMP/candidate-a" "$RUNNER_TEMP/candidate-b"
+          cp "$RUNNER_TEMP/candidate-a/build-report-v1.json" "$EVIDENCE/"
+          du -sb "$RUNNER_TEMP/candidate-a" > "$EVIDENCE/candidate-size.txt"
+          ls -l "$RUNNER_TEMP/candidate-a" > "$EVIDENCE/candidate-files.txt"
+          df -h "$RUNNER_TEMP" > "$EVIDENCE/disk-after.txt"
+          rm -rf "$RUNNER_TEMP/candidate-b" "$RUNNER_TEMP/source.jsonl.gz"
+
+      - name: Upload qualified pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.resolve.outputs.pack_id }}-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate-a
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.resolve.outputs.pack_id }}-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/qualification-evidence
+          retention-days: 90
+          if-no-files-found: warn

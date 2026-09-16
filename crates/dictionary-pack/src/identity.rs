@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use crate::{PackError, UNICODE_PROFILE};
 
 const PACK_REVISION_DOMAIN: &[u8] = b"ELDICT-PACK-REVISION-V1";
+const AUDIO_REVISION_DOMAIN: &[u8] = b"ELDICT-AUDIO-REVISION-V1";
 const ENTRY_ID_DOMAIN: &[u8] = b"ELDICT-ENTRY-ID-V1";
 const SNAPSHOT_REVISION_DOMAIN: &[u8] = b"ELDICT-SNAPSHOT-V1";
 const MAX_PACK_ID_BYTES: usize = 64;
@@ -73,6 +74,22 @@ pub struct PackRevisionInputs<'a> {
     pub minimum_app_version: &'a str,
 }
 
+/// Inputs that define one immutable audio collection revision.
+#[derive(Clone, Copy, Debug)]
+pub struct AudioRevisionInputs<'a> {
+    pub pack_id: &'a PackId,
+    pub corpus_language: &'a str,
+    pub source_corpus_pack_id: &'a PackId,
+    pub source_corpus_revision: &'a PackRevision,
+    pub acquired_at: &'a str,
+    pub encoder_profile: &'a str,
+    pub builder_revision: &'a str,
+    pub chunk_count: u64,
+    /// Digest of every recording's acquired facts, in file name order.
+    pub recording_input_digest: &'a [u8; 32],
+    pub minimum_app_version: &'a str,
+}
+
 /// The digest identity of one immutable pack revision.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PackRevision([u8; 32]);
@@ -101,6 +118,24 @@ impl PackRevision {
         digest.field(inputs.source_manifest_sha256);
         digest.field(inputs.license_manifest_sha256);
         digest.field(inputs.compatible_audio_collection.unwrap_or("").as_bytes());
+        digest.field(inputs.minimum_app_version.as_bytes());
+        Self(digest.finish())
+    }
+
+    /// Derives an audio collection revision from every input that affects its bytes.
+    #[must_use]
+    pub fn derive_audio(inputs: AudioRevisionInputs<'_>) -> Self {
+        let mut digest = FramedDigest::new(AUDIO_REVISION_DOMAIN);
+        digest.field(&crate::FORMAT_VERSION.to_be_bytes());
+        digest.field(inputs.pack_id.as_str().as_bytes());
+        digest.field(inputs.corpus_language.as_bytes());
+        digest.field(inputs.source_corpus_pack_id.as_str().as_bytes());
+        digest.field(inputs.source_corpus_revision.as_bytes());
+        digest.field(inputs.acquired_at.as_bytes());
+        digest.field(inputs.encoder_profile.as_bytes());
+        digest.field(inputs.builder_revision.as_bytes());
+        digest.field(&inputs.chunk_count.to_be_bytes());
+        digest.field(inputs.recording_input_digest);
         digest.field(inputs.minimum_app_version.as_bytes());
         Self(digest.finish())
     }

@@ -12,6 +12,18 @@ pub const DATA_APPLICATION_ID: u32 = 0x454c_4444;
 pub const INDEX_SCHEMA: &str = include_str!("schema/index-v1.sql");
 /// Canonical schema used to create a format-v1 data-shard database.
 pub const DATA_SCHEMA: &str = include_str!("schema/data-v1.sql");
+/// `SQLite` application ID `ELAI` for an audio collection index database.
+pub const AUDIO_INDEX_APPLICATION_ID: u32 = 0x454c_4149;
+/// `SQLite` application ID `ELAC` for an audio collection chunk database.
+pub const AUDIO_CHUNK_APPLICATION_ID: u32 = 0x454c_4143;
+/// Canonical schema used to create a format-v1 audio index database.
+pub const AUDIO_INDEX_SCHEMA: &str = include_str!("schema/audio-index-v1.sql");
+/// Canonical schema used to create a format-v1 audio chunk database.
+pub const AUDIO_CHUNK_SCHEMA: &str = include_str!("schema/audio-chunk-v1.sql");
+/// Encoding of every recording in a format-v1 audio collection.
+pub const AUDIO_ENCODER_PROFILE: &str = "ogg-opus-v1-mono-48khz-24kbps-voip-20ms";
+/// Media type of every recording in a format-v1 audio collection.
+pub const AUDIO_MEDIA_TYPE: &str = "audio/ogg; codecs=opus";
 /// Compression algorithm and settings required by format-v1 packs.
 pub const COMPRESSION_PROFILE: &str = "zstd-v1-level-6";
 /// Source fields admitted as lookup aliases by format-v1 packs.

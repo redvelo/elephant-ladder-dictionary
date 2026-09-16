@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use elephant_ladder_dictionary_pack::{
     BilingualLookupOutcome, BilingualView, DictionaryPack, LookupOptions, MatchClass, PackLimits,
+    ProjectionOptions, RelationKind,
 };
 use elephant_ladder_dictionary_pack_builder::{BuildManifest, BuildOptions, Sha256Hex, build_pack};
 use serde_json::Value;
@@ -110,11 +111,40 @@ fn fixture_manifest(fixture: &[u8], provenance: &Value) -> BuildManifest {
     }
 }
 
+fn verify_detail_semantics(pack: &DictionaryPack) {
+    let report = pack.validate_all().unwrap();
+    assert_eq!(report.authenticated_record_count, 4);
+
+    let elephant = pack.lookup("éléphant", LookupOptions::default()).unwrap();
+    let entry = pack
+        .entry(
+            &elephant.matches[0].entry.reference,
+            ProjectionOptions::detail(),
+        )
+        .unwrap();
+    assert_eq!(entry.etymology.total, 1);
+    assert_eq!(entry.senses.total, 4);
+    assert_eq!(entry.translations.total, 183);
+    let example = &entry.senses.items[0].examples.items[0];
+    assert_eq!(example.text_emphasis[0].start, 153);
+    assert!(example.reference.is_some());
+    let derived = entry
+        .relations
+        .iter()
+        .find(|group| group.kind == RelationKind::Derived)
+        .unwrap();
+    assert_eq!(derived.relations.total, 33);
+
+    let verb = pack.lookup("échelle", LookupOptions::default()).unwrap();
+    let verb = &verb.matches[1].entry;
+    assert_eq!(verb.senses.items[0].form_of[0].word, "écheler");
+}
+
 fn verify_lookup_semantics(pack: Arc<DictionaryPack>) {
     let elephant = pack.lookup("éléphant", LookupOptions::default()).unwrap();
     assert_eq!(elephant.matches.len(), 1);
     assert_eq!(
-        elephant.matches[0].entry.match_class,
+        elephant.matches[0].match_class,
         MatchClass::AuthoredHeadword
     );
     assert_eq!(
@@ -122,7 +152,9 @@ fn verify_lookup_semantics(pack: Arc<DictionaryPack>) {
         Some("noun")
     );
     assert_eq!(
-        elephant.matches[0].entry.pronunciations[0].ipa.as_deref(),
+        elephant.matches[0].entry.pronunciations.items[0]
+            .ipa
+            .as_deref(),
         Some("\\e.le.fɑ̃\\")
     );
 
@@ -147,10 +179,7 @@ fn verify_lookup_semantics(pack: Arc<DictionaryPack>) {
             result.matches[0].entry.reference.selected_ordinal,
             selected_ordinal
         );
-        assert_eq!(
-            result.matches[0].entry.match_class,
-            MatchClass::AuthoredForm
-        );
+        assert_eq!(result.matches[0].match_class, MatchClass::AuthoredForm);
     }
 
     let bilingual = BilingualView::new("french-english", pack, "en").unwrap();
@@ -164,13 +193,15 @@ fn verify_lookup_semantics(pack: Arc<DictionaryPack>) {
         translated.matches[0]
             .entry
             .senses
+            .items
             .iter()
-            .all(|sense| sense.translations.is_empty())
+            .all(|sense| sense.translations.items.is_empty())
     );
     assert_eq!(
         translated.matches[0]
             .entry
             .translations
+            .items
             .iter()
             .map(|translation| translation.word.as_deref())
             .collect::<Vec<_>>(),
@@ -195,5 +226,6 @@ fn pinned_frwiktionary_fixture_builds_and_exercises_real_lookup_semantics() {
     )
     .unwrap();
     let pack = Arc::new(DictionaryPack::open(output, PackLimits::default()).unwrap());
+    verify_detail_semantics(&pack);
     verify_lookup_semantics(pack);
 }

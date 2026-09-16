@@ -1190,7 +1190,7 @@ impl<R: Read> Read for DigestReader<R> {
     }
 }
 
-fn asset_for(role: &str, file_name: &str, path: &Path) -> Result<PackAsset, BuildError> {
+pub(crate) fn asset_for(role: &str, file_name: &str, path: &Path) -> Result<PackAsset, BuildError> {
     let size_bytes = fs::metadata(path)
         .map_err(|source| io_error("read metadata", path, source))?
         .len();
@@ -1227,7 +1227,7 @@ fn ensure_asset_bound(asset: &PackAsset, maximum: u64) -> Result<(), BuildError>
     }
 }
 
-fn sync_directory(path: &Path) -> Result<(), BuildError> {
+pub(crate) fn sync_directory(path: &Path) -> Result<(), BuildError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|source| io_error("sync directory", path, source))
@@ -1257,17 +1257,17 @@ fn write_build_report(directory: &Path, report: &BuildReport) -> Result<(), Buil
         .map_err(|source| io_error("sync", &path, source))
 }
 
-fn close_connection(connection: Connection) -> Result<(), BuildError> {
+pub(crate) fn close_connection(connection: Connection) -> Result<(), BuildError> {
     connection
         .close()
         .map_err(|(_, error)| BuildError::Database(error))
 }
 
-fn sql_i64(name: &'static str, value: u64) -> Result<i64, BuildError> {
+pub(crate) fn sql_i64(name: &'static str, value: u64) -> Result<i64, BuildError> {
     i64::try_from(value).map_err(|_| BuildError::IntegerRange { name, value })
 }
 
-fn io_error(operation: &'static str, path: &Path, source: io::Error) -> BuildError {
+pub(crate) fn io_error(operation: &'static str, path: &Path, source: io::Error) -> BuildError {
     BuildError::Io {
         operation,
         path: path.to_owned(),
@@ -1275,13 +1275,13 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> BuildErr
     }
 }
 
-struct StagingDirectory {
+pub(crate) struct StagingDirectory {
     path: PathBuf,
     published: bool,
 }
 
 impl StagingDirectory {
-    fn create(output: &Path) -> Result<Self, BuildError> {
+    pub(crate) fn create(output: &Path) -> Result<Self, BuildError> {
         if output.exists() {
             return Err(BuildError::OutputExists(output.to_owned()));
         }
@@ -1311,11 +1311,11 @@ impl StagingDirectory {
         ))
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
-    fn publish(&mut self, output: &Path) -> Result<(), BuildError> {
+    pub(crate) fn publish(&mut self, output: &Path) -> Result<(), BuildError> {
         rustix::fs::renameat_with(
             rustix::fs::CWD,
             &self.path,

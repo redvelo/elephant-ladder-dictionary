@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "fixture": {
+    "file": "jawiktionary-20260901.jsonl",
+    "sha256": "4320d064f578111236e0d35e79bdd7242a50f7c39dadf971cea4a95bf0f289f5",
+    "size_bytes": 31137,
+    "line_count": 4,
+    "line_ending": "LF",
+    "terminal_lf": true
+  },
+  "source": {
+    "wiktionary_edition": "jawiktionary",
+    "selected_entry_language": "ja",
+    "dump_date": "2026-09-01",
+    "raw_extraction": {
+      "started_date": "2026-09-08",
+      "url": "https://kaikki.org/dictionary/downloads/ja/ja-extract.jsonl.gz",
+      "info_page": "https://kaikki.org/jawiktionary/rawdata.html",
+      "compressed_sha256": "11ac3923a8a6b6b754dd8048ea932a7cde1fcd19e4faa279313bcd4fc1dd9701",
+      "uncompressed_sha256": "02d22f0fe62124c09389867ae3cd263b94512d5cec20d228f7c3ec890224f7f8",
+      "uncompressed_line_count": 665415,
+      "uncompressed_size_bytes": 424995591
+    },
+    "extraction_log": {
+      "url": "https://kaikki.org/dictionary/downloads/ja/ja-extract.log",
+      "sha256": "a320dbeca7015e2242f4fae50f5c0363d500414d814383a341f8c940208f743d"
+    },
+    "wiktextract_commit": null,
+    "wiktextract_commit_note": "The extraction log does not record the Wiktextract revision, and the information page already describes a later extraction."
+  },
+  "selection": {
+    "policy": "Copy the listed raw JSON lines byte-for-byte in source order with LF delimiters and no reserialization."
+  },
+  "records": [
+    {
+      "fixture_line": 1,
+      "source_line": 8641,
+      "source_byte_offset": 9800849,
+      "word": "ねこ",
+      "language_code": "ja",
+      "part_of_speech": "noun",
+      "record_sha256_excluding_lf": "4e60ae55f73ec7053b31e60bbfe1b0e06d5f9a7d890f59d54c1093e73de4ecf5",
+      "source_page": "https://ja.wiktionary.org/wiki/%E3%81%AD%E3%81%93",
+      "rationale": [
+        "audio reference",
+        "synonyms",
+        "derived terms",
+        "translations"
+      ]
+    },
+    {
+      "fixture_line": 2,
+      "source_line": 13116,
+      "source_byte_offset": 14634511,
+      "word": "はしる",
+      "language_code": "ja",
+      "part_of_speech": "verb",
+      "record_sha256_excluding_lf": "4cdfe9ba6c0165cc17dd896fa2f904a2920cb9cf2984e43d754b9eee2982a2c4",
+      "source_page": "https://ja.wiktionary.org/wiki/%E3%81%AF%E3%81%97%E3%82%8B",
+      "rationale": [
+        "verb",
+        "inflected forms",
+        "examples with emphasis",
+        "topics"
+      ]
+    },
+    {
+      "fixture_line": 3,
+      "source_line": 19331,
+      "source_byte_offset": 20614852,
+      "word": "走る",
+      "language_code": "ja",
+      "part_of_speech": "character",
+      "record_sha256_excluding_lf": "932de5572b34ad67cf0054304c3d5018405df8d62e135fc141e13a9e1438394d",
+      "source_page": "https://ja.wiktionary.org/wiki/%E8%B5%B0%E3%82%8B",
+      "rationale": [
+        "kanji spelling",
+        "form_of cross-reference"
+      ]
+    },
+    {
+      "fixture_line": 4,
+      "source_line": 523303,
+      "source_byte_offset": 330675632,
+      "word": "電子書籍",
+      "language_code": "ja",
+      "part_of_speech": "noun",
+      "record_sha256_excluding_lf": "9b07cf963a3e182dcfb23dbd54c2b8d55d20c938f3eac4015721856dd8e7c897",
+      "source_page": "https://ja.wiktionary.org/wiki/%E9%9B%BB%E5%AD%90%E6%9B%B8%E7%B1%8D",
+      "rationale": [
+        "e-reading terminology",
+        "kana reading form"
+      ]
+    }
+  ],
+  "licensing": {
+    "scope": "The fixture records remain third-party Wiktionary content under the Wiktionary and Kaikki terms stated by the recorded source information page; the project code license does not cover them.",
+    "wiktionary_copyright": "https://ja.wiktionary.org/wiki/Wiktionary:著作権",
+    "licenses": [
+      {
+        "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+        "spdx": "CC-BY-SA-4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0/"
+      },
+      {
+        "name": "GNU Free Documentation License 1.3",
+        "spdx": "GFDL-1.3-only",
+        "url": "https://www.gnu.org/licenses/fdl-1.3.html"
+      }
+    ]
+  },
+  "retrieved_and_verified_date": "2026-09-16"
+}

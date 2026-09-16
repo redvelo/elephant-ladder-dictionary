@@ -1,0 +1,119 @@
+name: Snapshot Source
+
+on:
+  workflow_dispatch:
+    inputs:
+      edition:
+        description: Edition configuration name, such as enwiktionary
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: snapshot-source-${{ inputs.edition }}
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: source-snapshot
+    env:
+      PACKS_REPOSITORY: ${{ vars.PACKS_REPOSITORY }}
+      EDITION_FILE: editions/${{ inputs.edition }}.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CAPTURE=$RUNNER_TEMP/capture" >> "$GITHUB_ENV"
+          [[ "${{ inputs.edition }}" =~ ^[a-z]+wiktionary$ ]]
+          test -f "$EDITION_FILE"
+          [[ "$PACKS_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+
+      - name: Build tool
+        run: cargo build --locked --release --bin elephant-dictionary-pack
+
+      - name: Capture source
+        id: capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/capture_source.py \
+            --edition "$EDITION_FILE" \
+            --mirror-repository "$PACKS_REPOSITORY" \
+            --output "$CAPTURE" | tee "$RUNNER_TEMP/capture.out"
+          cat "$RUNNER_TEMP/capture.out" >> "$GITHUB_OUTPUT"
+
+      - name: Validate snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          target/release/elephant-dictionary-pack source validate \
+            --edition "$EDITION_FILE" --snapshot "${{ steps.capture.outputs.snapshot }}"
+          target/release/elephant-dictionary-pack source manifest \
+            --edition "$EDITION_FILE" --snapshot "${{ steps.capture.outputs.snapshot }}" \
+            --builder-revision "$GITHUB_SHA" > /dev/null
+
+      - name: Publish immutable mirror release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PACKS_RELEASE_TOKEN }}
+          TAG: ${{ steps.capture.outputs.release_tag }}
+          SNAPSHOT: ${{ steps.capture.outputs.snapshot }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$PACKS_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::release $TAG already exists; snapshots are never replaced"
+            exit 1
+          fi
+          jq -r --arg info "$(jq -r .origin.info_url "$SNAPSHOT")" '
+            "Immutable mirror of the Kaikki.org Wiktextract extraction of \(.wiktionary_edition), "
+            + "dump \(.dump_date), extracted \(.extraction_date).\n\n"
+            + "Source: \(.origin.source_url)\nInformation: \($info)\n\n"
+            + "Concatenate the parts in order to reproduce the archive with SHA-256 "
+            + "\(.compressed.sha256).\n\n"
+            + "The data remains third-party Wiktionary content under its original terms, "
+            + "including CC BY-SA 4.0 and GFDL 1.3."
+          ' "$SNAPSHOT" > "$RUNNER_TEMP/notes.md"
+          mapfile -t assets < <(jq -r --arg dir "$CAPTURE" \
+            '(.mirror.parts[], .mirror.info_page) | "\($dir)/\(.file_name)"' "$SNAPSHOT")
+          gh release create "$TAG" "${assets[@]}" \
+            --repo "$PACKS_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+          gh release download "$TAG" --repo "$PACKS_REPOSITORY" \
+            --dir "$RUNNER_TEMP/published" --pattern '*'
+          jq -r '(.mirror.parts[], .mirror.info_page) | "\(.sha256)  \(.file_name)"' \
+            "$SNAPSHOT" | (cd "$RUNNER_TEMP/published" && sha256sum --check --strict)
+
+      - name: Open snapshot pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.capture.outputs.release_tag }}
+          SNAPSHOT: ${{ steps.capture.outputs.snapshot }}
+        run: |
+          set -euo pipefail
+          branch="snapshot/$TAG"
+          mkdir -p sources
+          cp "$SNAPSHOT" "sources/$(basename "$SNAPSHOT")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "sources/$(basename "$SNAPSHOT")"
+          git commit -m "Pin source snapshot $TAG"
+          git push origin "$branch"
+          gh pr create --head "$branch" --title "Pin source snapshot $TAG" \
+            --body "Mirror: https://github.com/$PACKS_REPOSITORY/releases/tag/$TAG"

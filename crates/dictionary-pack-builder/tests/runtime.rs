@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use elephant_ladder_dictionary_pack::{
     BilingualLookupOutcome, BilingualView, DictionaryPack, DictionaryService, DictionarySnapshot,
-    DictionaryView, LookupOptions, MatchClass, MonolingualView, PACK_MANIFEST_FILE, PackError,
-    PackLimits, SectionKind,
+    DictionaryView, ExpectedPack, LookupOptions, MatchClass, MonolingualView, PACK_MANIFEST_FILE,
+    PackError, PackLimits, ProjectionOptions,
 };
 use elephant_ladder_dictionary_pack_builder::{BuildManifest, BuildOptions, Sha256Hex, build_pack};
 use serde_json::{Value, json};
@@ -64,17 +64,30 @@ fn exact_lookup_stops_at_first_stage_and_preserves_order_and_truncation() {
     );
     let (_temporary, pack) = build(source.as_bytes(), 1);
 
-    let exact = pack.lookup("strasse", LookupOptions { limit: 1 }).unwrap();
+    let exact = pack
+        .lookup(
+            "strasse",
+            LookupOptions {
+                limit: 1,
+                ..LookupOptions::default()
+            },
+        )
+        .unwrap();
     assert_eq!(exact.matches.len(), 1);
     assert!(exact.truncated);
     assert_eq!(exact.matches[0].entry.headword, "strasse");
-    assert_eq!(
-        exact.matches[0].entry.match_class,
-        MatchClass::AuthoredHeadword
-    );
+    assert_eq!(exact.matches[0].match_class, MatchClass::AuthoredHeadword);
     assert_eq!(exact.matches[0].entry.reference.selected_ordinal, 1);
 
-    let folded = pack.lookup("STRASSE", LookupOptions { limit: 10 }).unwrap();
+    let folded = pack
+        .lookup(
+            "STRASSE",
+            LookupOptions {
+                limit: 10,
+                ..LookupOptions::default()
+            },
+        )
+        .unwrap();
     assert_eq!(
         folded
             .matches
@@ -87,7 +100,7 @@ fn exact_lookup_stops_at_first_stage_and_preserves_order_and_truncation() {
         folded
             .matches
             .iter()
-            .all(|matched| matched.entry.match_class == MatchClass::FoldedHeadword)
+            .all(|matched| matched.match_class == MatchClass::FoldedHeadword)
     );
 }
 
@@ -102,12 +115,12 @@ fn form_lookup_routes_across_shards_and_returns_typed_semantics() {
     let (_temporary, pack) = build(source.as_bytes(), 1);
     let outcome = pack.lookup("ran", LookupOptions::default()).unwrap();
     let entry = &outcome.matches[0].entry;
-    assert_eq!(entry.match_class, MatchClass::FoldedForm);
+    assert_eq!(outcome.matches[0].match_class, MatchClass::FoldedForm);
     assert_eq!(entry.headword, "run");
-    assert_eq!(entry.pronunciations[0].ipa.as_deref(), Some("ɹʌn"));
-    assert_eq!(entry.senses[0].glosses, ["move quickly"]);
+    assert_eq!(entry.pronunciations.items[0].ipa.as_deref(), Some("ɹʌn"));
+    assert_eq!(entry.senses.items[0].glosses, ["move quickly"]);
     assert_eq!(
-        entry.senses[0].translations[0].word.as_deref(),
+        entry.senses.items[0].translations.items[0].word.as_deref(),
         Some("courir")
     );
 }
@@ -150,41 +163,27 @@ fn bilingual_views_distinguish_missing_entries_and_translations() {
         "{\"word\":\"bonjour\",\"lang_code\":\"fr\"}]}]}\n",
         "{\"lang_code\":\"en\",\"word\":\"alone\",\"senses\":[{\"glosses\":[\"solo\"]}]}\n",
     );
-    let (_temporary, initial) = build(source.as_bytes(), 1_000_000);
-    let directory = initial.directory().to_owned();
-    drop(initial);
-    let pack = Arc::new(
-        DictionaryPack::open(
-            directory,
-            PackLimits {
-                max_senses: 1,
-                ..PackLimits::default()
-            },
-        )
-        .unwrap(),
-    );
+    let (_temporary, pack) = build(source.as_bytes(), 1_000_000);
     let view = BilingualView::new("english-french", pack, "fr").unwrap();
+    let options = LookupOptions {
+        projection: ProjectionOptions {
+            senses: 1,
+            ..ProjectionOptions::summary()
+        },
+        ..LookupOptions::default()
+    };
 
-    let BilingualLookupOutcome::Translations(translated) =
-        view.lookup("hello", LookupOptions::default()).unwrap()
+    let BilingualLookupOutcome::Translations(translated) = view.lookup("hello", options).unwrap()
     else {
         panic!("expected target translation");
     };
-    assert_eq!(
-        translated.matches[0].entry.translations[0].word.as_deref(),
-        Some("salut")
-    );
-    assert!(
-        translated.matches[0].entry.senses[0]
-            .translations
-            .is_empty()
-    );
-    assert!(translated.matches[0].entry.sections.iter().any(|section| {
-        section.kind == SectionKind::Translations
-            && section.available == 2
-            && section.included == 1
-            && section.truncated
-    }));
+    let entry = &translated.matches[0].entry;
+    assert_eq!(entry.translations.items[0].word.as_deref(), Some("salut"));
+    assert_eq!(entry.translations.total, 1);
+    assert_eq!(entry.senses.total, 2);
+    assert_eq!(entry.senses.items.len(), 1);
+    assert_eq!(entry.senses.items[0].translations.total, 0);
+    assert_eq!(entry.sense_translation_total, 1);
     assert!(matches!(
         view.lookup("alone", LookupOptions::default()).unwrap(),
         BilingualLookupOutcome::NoTranslation(_)
@@ -221,12 +220,12 @@ fn translation_and_pronunciation_metadata_is_retained() {
     let (_temporary, pack) = build(source.as_bytes(), 1_000_000);
     let outcome = pack.lookup("metadata", LookupOptions::default()).unwrap();
     let entry = &outcome.matches[0].entry;
-    let translation = &entry.translations[0];
+    let translation = &entry.translations.items[0];
     assert_eq!(translation.word, None);
     assert_eq!(translation.language_name.as_deref(), Some("French"));
     assert_eq!(translation.language_code.as_deref(), Some("fr"));
     assert_eq!(translation.alt.as_deref(), Some("alternative"));
-    assert_eq!(translation.english.as_deref(), Some("clarification"));
+    assert_eq!(translation.translation.as_deref(), Some("clarification"));
     assert_eq!(translation.note.as_deref(), Some("note only"));
     assert_eq!(translation.sense.as_deref(), Some("meaning"));
     assert_eq!(translation.taxonomic.as_deref(), Some("Taxon species"));
@@ -234,7 +233,7 @@ fn translation_and_pronunciation_metadata_is_retained() {
     assert_eq!(translation.tags, ["formal"]);
     assert_eq!(translation.raw_tags, ["raw formal"]);
 
-    let pronunciation = &entry.pronunciations[0];
+    let pronunciation = &entry.pronunciations.items[0];
     assert_eq!(pronunciation.ipa.as_deref(), Some("/meta/"));
     assert_eq!(pronunciation.enpr.as_deref(), Some("mĕt′ə"));
     assert_eq!(pronunciation.zh_pronunciation.as_deref(), Some("zh fact"));
@@ -246,7 +245,13 @@ fn translation_and_pronunciation_metadata_is_retained() {
     assert_eq!(pronunciation.text.as_deref(), Some("Audio (US)"));
     assert_eq!(pronunciation.note.as_deref(), Some("pronunciation note"));
     assert_eq!(pronunciation.other.as_deref(), Some("other notation"));
-    assert_eq!(pronunciation.audio.as_deref(), Some("Metadata.ogg"));
+    assert_eq!(
+        pronunciation
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.file_name.as_deref()),
+        Some("Metadata.ogg")
+    );
     assert_eq!(pronunciation.audio_ipa.as_deref(), Some("[meta]"));
     assert_eq!(
         pronunciation.wav_url.as_deref(),
@@ -345,30 +350,31 @@ fn semantic_projection_reports_every_kind_of_bounded_loss() {
         "\"translations\":[{\"word\":\"abcde\"},{\"word\":\"second\"}]},",
         "{\"glosses\":[\"omitted\"],\"translations\":[{\"word\":\"third\"}]}]}\n",
     );
-    let (_temporary, initial) = build(source.as_bytes(), 1_000_000);
-    let directory = initial.directory().to_owned();
-    drop(initial);
-    let pack = DictionaryPack::open(
-        directory,
-        PackLimits {
-            max_text_bytes: 4,
-            max_tags: 1,
-            max_pronunciations: 1,
-            max_senses: 1,
-            max_glosses_per_sense: 1,
-            max_translations_per_sense: 1,
-            ..PackLimits::default()
+    let (_temporary, pack) = build(source.as_bytes(), 1_000_000);
+    let options = LookupOptions {
+        projection: ProjectionOptions {
+            text_bytes: 4,
+            strings: 1,
+            pronunciations: 1,
+            senses: 1,
+            translations: 1,
+            ..ProjectionOptions::summary()
         },
-    )
-    .unwrap();
-    let outcome = pack.lookup("lengthy", LookupOptions::default()).unwrap();
+        ..LookupOptions::default()
+    };
+    let outcome = pack.lookup("lengthy", options).unwrap();
     let entry = &outcome.matches[0].entry;
     assert_eq!(entry.headword, "leng");
     assert_eq!(entry.language_code, "en");
     assert!(entry.truncated);
     assert_eq!(entry.tags, ["firs"]);
 
-    let pronunciation = &entry.pronunciations[0];
+    assert_eq!(
+        (entry.pronunciations.total, entry.pronunciations.items.len()),
+        (2, 1)
+    );
+    assert!(entry.pronunciations.is_partial());
+    let pronunciation = &entry.pronunciations.items[0];
     assert!(pronunciation.truncated);
     assert_eq!(pronunciation.ipa.as_deref(), Some("1234"));
     assert_eq!(pronunciation.homophones, ["abcd"]);
@@ -376,51 +382,29 @@ fn semantic_projection_reports_every_kind_of_bounded_loss() {
     assert_eq!(pronunciation.tags, ["abcd"]);
     assert_eq!(pronunciation.raw_tags, ["abcd"]);
 
-    let translation = &entry.translations[0];
+    assert_eq!(
+        (entry.translations.total, entry.translations.items.len()),
+        (2, 1)
+    );
+    let translation = &entry.translations.items[0];
     assert!(translation.truncated);
     assert_eq!(translation.word.as_deref(), Some("1234"));
     assert_eq!(translation.tags, ["abcd"]);
     assert_eq!(translation.raw_tags, ["abcd"]);
 
-    let sense = &entry.senses[0];
+    assert_eq!((entry.senses.total, entry.senses.items.len()), (2, 1));
+    assert_eq!(entry.sense_translation_total, 3);
+    let sense = &entry.senses.items[0];
     assert!(sense.truncated);
     assert_eq!(sense.glosses, ["abcd"]);
     assert_eq!(sense.raw_glosses, ["abcd"]);
     assert_eq!(sense.tags, ["abcd"]);
-    assert!(sense.translations[0].truncated);
-    assert_eq!(sense.translations[0].word.as_deref(), Some("abcd"));
-
-    let section = |kind| {
-        entry
-            .sections
-            .iter()
-            .find(|section| section.kind == kind)
-            .unwrap()
-    };
     assert_eq!(
-        (
-            section(SectionKind::Pronunciations).available,
-            section(SectionKind::Pronunciations).included
-        ),
+        (sense.translations.total, sense.translations.items.len()),
         (2, 1)
     );
-    assert!(section(SectionKind::Pronunciations).truncated);
-    assert_eq!(
-        (
-            section(SectionKind::Senses).available,
-            section(SectionKind::Senses).included
-        ),
-        (2, 1)
-    );
-    assert!(section(SectionKind::Senses).truncated);
-    assert_eq!(
-        (
-            section(SectionKind::Translations).available,
-            section(SectionKind::Translations).included
-        ),
-        (5, 2)
-    );
-    assert!(section(SectionKind::Translations).truncated);
+    assert!(sense.translations.items[0].truncated);
+    assert_eq!(sense.translations.items[0].word.as_deref(), Some("abcd"));
 }
 
 #[test]
@@ -605,4 +589,153 @@ fn lookup_enforces_the_declared_decompression_bound() {
         pack.lookup("bounded", LookupOptions::default()),
         Err(PackError::Limit(_))
     ));
+}
+
+fn expected_pack(pack: &DictionaryPack) -> ExpectedPack {
+    let manifest = fs::read(pack.directory().join(PACK_MANIFEST_FILE)).unwrap();
+    ExpectedPack {
+        pack_id: pack.pack_id().clone(),
+        pack_revision: *pack.pack_revision(),
+        manifest_sha256: digest(&manifest),
+    }
+}
+
+fn data_asset_path(directory: &std::path::Path) -> std::path::PathBuf {
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(directory.join(PACK_MANIFEST_FILE)).unwrap()).unwrap();
+    let name = manifest["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|asset| asset["role"] == "data")
+        .unwrap()["file_name"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    directory.join(name)
+}
+
+#[test]
+fn trusted_admission_requires_the_expected_manifest_and_identity() {
+    let source = b"{\"lang_code\":\"en\",\"word\":\"one\"}\n";
+    let (_temporary, pack) = build(source, 1_000_000);
+    let directory = pack.directory().to_owned();
+    let expected = expected_pack(&pack);
+    drop(pack);
+
+    let verified = DictionaryPack::verify(&directory, &expected, PackLimits::default()).unwrap();
+    assert_eq!(
+        verified
+            .lookup("one", LookupOptions::default())
+            .unwrap()
+            .matches
+            .len(),
+        1
+    );
+    drop(verified);
+    let installed =
+        DictionaryPack::open_installed(&directory, &expected, PackLimits::default()).unwrap();
+    assert_eq!(
+        installed
+            .lookup("one", LookupOptions::default())
+            .unwrap()
+            .matches
+            .len(),
+        1
+    );
+    drop(installed);
+
+    let wrong_manifest = ExpectedPack {
+        manifest_sha256: digest(b"another manifest"),
+        ..expected.clone()
+    };
+    let wrong_revision = ExpectedPack {
+        pack_revision: [7; 32].into(),
+        ..expected.clone()
+    };
+    let wrong_pack = ExpectedPack {
+        pack_id: "wiktionary-fr-fr".parse().unwrap(),
+        ..expected
+    };
+    for expected in [wrong_manifest, wrong_revision, wrong_pack] {
+        assert!(matches!(
+            DictionaryPack::verify(&directory, &expected, PackLimits::default()),
+            Err(PackError::Corrupt(_))
+        ));
+        assert!(matches!(
+            DictionaryPack::open_installed(&directory, &expected, PackLimits::default()),
+            Err(PackError::Corrupt(_))
+        ));
+    }
+}
+
+#[test]
+fn installed_admission_skips_byte_hashing_but_served_records_stay_authenticated() {
+    let source = b"{\"lang_code\":\"en\",\"word\":\"authenticated\"}\n";
+    let (_temporary, pack) = build(source, 1_000_000);
+    let directory = pack.directory().to_owned();
+    let expected = expected_pack(&pack);
+    drop(pack);
+
+    let data_path = data_asset_path(&directory);
+    let original_size = fs::metadata(&data_path).unwrap().len();
+    let connection = rusqlite::Connection::open(&data_path).unwrap();
+    let mut compressed: Vec<u8> = connection
+        .query_row(
+            "SELECT source_json_zstd FROM records WHERE selected_ordinal = 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let last = compressed.len() - 1;
+    compressed[last] ^= 0x20;
+    connection
+        .execute(
+            "UPDATE records SET source_json_zstd = ?1 WHERE selected_ordinal = 0",
+            [compressed],
+        )
+        .unwrap();
+    connection.close().unwrap();
+    assert_eq!(fs::metadata(&data_path).unwrap().len(), original_size);
+
+    assert!(matches!(
+        DictionaryPack::verify(&directory, &expected, PackLimits::default()),
+        Err(PackError::Corrupt(message)) if message.contains("SHA-256 mismatch")
+    ));
+    let installed =
+        DictionaryPack::open_installed(&directory, &expected, PackLimits::default()).unwrap();
+    assert!(matches!(
+        installed.lookup("authenticated", LookupOptions::default()),
+        Err(PackError::Corrupt(_))
+    ));
+}
+
+#[test]
+fn installed_admission_rejects_asset_size_and_schema_changes() {
+    let source = b"{\"lang_code\":\"en\",\"word\":\"one\"}\n";
+    let (_temporary, pack) = build(source, 1_000_000);
+    let directory = pack.directory().to_owned();
+    let expected = expected_pack(&pack);
+    drop(pack);
+
+    let data_path = data_asset_path(&directory);
+    let original = fs::read(&data_path).unwrap();
+    let mut extended = original.clone();
+    extended.extend_from_slice(&[0; 4096]);
+    fs::write(&data_path, &extended).unwrap();
+    assert!(matches!(
+        DictionaryPack::open_installed(&directory, &expected, PackLimits::default()),
+        Err(PackError::Corrupt(message)) if message.contains("size mismatch")
+    ));
+
+    fs::write(&data_path, &original).unwrap();
+    let connection = rusqlite::Connection::open(&data_path).unwrap();
+    connection
+        .execute_batch("DROP TABLE shard_metadata; CREATE TABLE shard_metadata (x INTEGER);")
+        .unwrap();
+    connection.close().unwrap();
+    let mut resized = fs::read(&data_path).unwrap();
+    resized.resize(original.len(), 0);
+    fs::write(&data_path, resized).unwrap();
+    assert!(DictionaryPack::open_installed(&directory, &expected, PackLimits::default()).is_err());
 }

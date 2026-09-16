@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "wiktionary_edition": "frwiktionary",
+  "corpus_language": "fr",
+  "pack_id": "wiktionary-fr-fr",
+  "origin": {
+    "source_url": "https://kaikki.org/frwiktionary/raw-wiktextract-data.jsonl.gz",
+    "info_url": "https://kaikki.org/frwiktionary/rawdata.html"
+  },
+  "target_shard_payload_bytes": 536870912,
+  "minimum_app_version": "0.1.0",
+  "license_manifest": {
+    "schema_version": 1,
+    "source": "French Wiktionary via the raw Kaikki.org Wiktextract extraction",
+    "notice": "Dictionary content remains third-party material; the Elephant Ladder Dictionary code license does not apply to it.",
+    "attribution_urls": [
+      "https://fr.wiktionary.org/",
+      "https://fr.wiktionary.org/wiki/Wiktionnaire:Copyright",
+      "https://kaikki.org/frwiktionary/"
+    ],
+    "licenses": [
+      {
+        "spdx": "CC-BY-SA-4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0/"
+      },
+      {
+        "spdx": "GFDL-1.3-only",
+        "url": "https://www.gnu.org/licenses/fdl-1.3.html"
+      }
+    ]
+  },
+  "audio": {
+    "pack_id": "wiktionary-fr-audio",
+    "chunk_count": 4
+  }
+}

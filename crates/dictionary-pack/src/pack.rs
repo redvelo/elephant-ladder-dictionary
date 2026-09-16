@@ -8,12 +8,13 @@ use std::sync::{Mutex, MutexGuard};
 use rusqlite::{Connection, OpenFlags, params};
 use sha2::{Digest, Sha256};
 
-use crate::semantic::{RoutingRecord, SemanticBounds};
+use crate::semantic::RoutingRecord;
 use crate::{
-    COMPRESSION_PROFILE, DATA_APPLICATION_ID, DATA_SCHEMA, EntryId, EntryReference, EntrySummary,
+    COMPRESSION_PROFILE, DATA_APPLICATION_ID, DATA_SCHEMA, Entry, EntryId, EntryReference,
     FORMAT_VERSION, INDEX_APPLICATION_ID, INDEX_SCHEMA, MatchClass, PACK_MANIFEST_FILE, PackError,
-    PackId, PackManifest, PackRevision, PackRevisionInputs, ROUTING_POLICY,
-    SELECTED_STREAM_DIGEST_DOMAIN, SHARD_RECORD_DIGEST_DOMAIN, UNICODE_PROFILE, lookup_keys,
+    PackId, PackManifest, PackRevision, PackRevisionInputs, ProjectionOptions, ROUTING_POLICY,
+    SELECTED_STREAM_DIGEST_DOMAIN, SHARD_RECORD_DIGEST_DOMAIN, Section, SectionPage, Sha256Hex,
+    UNICODE_PROFILE, lookup_keys,
 };
 
 /// Runtime bounds applied while admitting a pack and projecting records.
@@ -27,12 +28,8 @@ pub struct PackLimits {
     pub max_compressed_record_bytes: u64,
     pub max_uncompressed_record_bytes: u64,
     pub max_routing_forms: usize,
-    pub max_text_bytes: usize,
-    pub max_tags: usize,
-    pub max_pronunciations: usize,
-    pub max_senses: usize,
-    pub max_glosses_per_sense: usize,
-    pub max_translations_per_sense: usize,
+    pub max_section_page_items: usize,
+    pub max_recording_bytes: u64,
 }
 
 impl Default for PackLimits {
@@ -46,18 +43,14 @@ impl Default for PackLimits {
             max_compressed_record_bytes: 16 * 1024 * 1024,
             max_uncompressed_record_bytes: 64 * 1024 * 1024,
             max_routing_forms: 4096,
-            max_text_bytes: 16 * 1024,
-            max_tags: 256,
-            max_pronunciations: 256,
-            max_senses: 1024,
-            max_glosses_per_sense: 256,
-            max_translations_per_sense: 256,
+            max_section_page_items: 256,
+            max_recording_bytes: 1024 * 1024,
         }
     }
 }
 
 impl PackLimits {
-    fn validate(self) -> Result<Self, PackError> {
+    pub(crate) fn validate(self) -> Result<Self, PackError> {
         let valid = self.max_manifest_bytes > 0
             && self.max_assets > 0
             && self.max_asset_bytes > 0
@@ -66,12 +59,8 @@ impl PackLimits {
             && self.max_compressed_record_bytes > 0
             && self.max_uncompressed_record_bytes > 0
             && self.max_routing_forms > 0
-            && self.max_text_bytes > 0
-            && self.max_tags > 0
-            && self.max_pronunciations > 0
-            && self.max_senses > 0
-            && self.max_glosses_per_sense > 0
-            && self.max_translations_per_sense > 0;
+            && self.max_section_page_items > 0
+            && self.max_recording_bytes > 0;
         if valid {
             Ok(self)
         } else {
@@ -80,35 +69,29 @@ impl PackLimits {
             ))
         }
     }
-
-    const fn semantic(self) -> SemanticBounds {
-        SemanticBounds {
-            text_bytes: self.max_text_bytes,
-            tags: self.max_tags,
-            pronunciations: self.max_pronunciations,
-            senses: self.max_senses,
-            glosses_per_sense: self.max_glosses_per_sense,
-            translations_per_sense: self.max_translations_per_sense,
-        }
-    }
 }
 
 /// Per-call exact lookup controls.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LookupOptions {
     pub limit: usize,
+    pub projection: ProjectionOptions,
 }
 
 impl Default for LookupOptions {
     fn default() -> Self {
-        Self { limit: 20 }
+        Self {
+            limit: 20,
+            projection: ProjectionOptions::summary(),
+        }
     }
 }
 
 /// One exact match and its bounded typed semantic projection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LookupMatch {
-    pub entry: EntrySummary,
+    pub match_class: MatchClass,
+    pub entry: Entry,
 }
 
 /// Results from the first non-empty exact-match stage.
@@ -116,6 +99,15 @@ pub struct LookupMatch {
 pub struct LookupOutcome {
     pub matches: Vec<LookupMatch>,
     pub truncated: bool,
+}
+
+/// Every audio file referenced by a pack's records.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AudioReferences {
+    /// Normalized Commons file names with the number of referencing sounds.
+    pub files: BTreeMap<String, u64>,
+    /// Authored audio values that are not plausible Commons file names.
+    pub invalid: BTreeMap<String, u64>,
 }
 
 /// Facts authenticated by a complete traversal of a pack's selected corpus.
@@ -133,6 +125,23 @@ impl LookupOutcome {
     }
 }
 
+/// Pack identity obtained through a trusted channel, such as a verified catalog.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpectedPack {
+    pub pack_id: PackId,
+    pub pack_revision: PackRevision,
+    /// SHA-256 of the exact `pack-manifest-v1.json` bytes.
+    pub manifest_sha256: Sha256Hex,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum Admission {
+    /// Hashes every asset byte and checks complete relational structure.
+    Full,
+    /// Trusts previously verified asset bytes and checks identity and structure cheaply.
+    Installed,
+}
+
 struct DataShard {
     ordinal: u64,
     route: ShardRoute,
@@ -144,7 +153,7 @@ pub struct DictionaryPack {
     directory: PathBuf,
     pack_id: PackId,
     revision: PackRevision,
-    corpus_language: String,
+    metadata: PackMetadata,
     manifest: PackManifest,
     limits: PackLimits,
     index: Mutex<Connection>,
@@ -160,15 +169,77 @@ impl DictionaryPack {
     /// Returns an error for malformed manifests, unsafe assets, byte mismatches,
     /// invalid databases, or inconsistent redundant metadata.
     pub fn open(directory: impl AsRef<Path>, limits: PackLimits) -> Result<Self, PackError> {
+        Self::admit(directory.as_ref(), None, Admission::Full, limits)
+    }
+
+    /// Performs complete admission of a pack that must match a trusted identity.
+    ///
+    /// Use this once before a pack becomes installed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Self::open`], and [`PackError::Corrupt`] when the
+    /// manifest bytes, pack identifier, or revision differ from `expected`.
+    pub fn verify(
+        directory: impl AsRef<Path>,
+        expected: &ExpectedPack,
+        limits: PackLimits,
+    ) -> Result<Self, PackError> {
+        Self::admit(directory.as_ref(), Some(expected), Admission::Full, limits)
+    }
+
+    /// Opens a pack previously admitted by [`Self::verify`] without hashing asset
+    /// bytes or running `SQLite` integrity checks.
+    ///
+    /// The manifest digest, asset sizes, database identities, exact schemas, and
+    /// metadata identity are still checked. Every record served remains
+    /// authenticated against its stored digest and entry identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any of those checks disagree with `expected`.
+    pub fn open_installed(
+        directory: impl AsRef<Path>,
+        expected: &ExpectedPack,
+        limits: PackLimits,
+    ) -> Result<Self, PackError> {
+        Self::admit(
+            directory.as_ref(),
+            Some(expected),
+            Admission::Installed,
+            limits,
+        )
+    }
+
+    fn admit(
+        directory: &Path,
+        expected: Option<&ExpectedPack>,
+        admission: Admission,
+        limits: PackLimits,
+    ) -> Result<Self, PackError> {
         let limits = limits.validate()?;
-        let directory = directory.as_ref().to_owned();
+        let directory = directory.to_owned();
         let manifest_path = directory.join(PACK_MANIFEST_FILE);
         let manifest_bytes = read_bounded(&manifest_path, limits.max_manifest_bytes)?;
+        if let Some(expected) = expected
+            && Sha256::digest(&manifest_bytes).as_slice() != expected.manifest_sha256.as_bytes()
+        {
+            return Err(PackError::Corrupt(
+                "pack manifest SHA-256 differs from the expected pack".to_owned(),
+            ));
+        }
         let manifest: PackManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|error| PackError::Malformed(format!("invalid pack manifest: {error}")))?;
         validate_manifest(&manifest, limits)?;
         let pack_id = PackId::from_str(&manifest.pack_id)?;
         let revision = PackRevision::from_bytes(*manifest.pack_revision.as_bytes());
+        if let Some(expected) = expected
+            && (expected.pack_id != pack_id || expected.pack_revision != revision)
+        {
+            return Err(PackError::Corrupt(
+                "pack identity differs from the expected pack".to_owned(),
+            ));
+        }
         let revision_hex = revision.to_hex();
         let expected_index_name = format!("{}-{revision_hex}-index.eldict", pack_id.as_str());
 
@@ -176,7 +247,12 @@ impl DictionaryPack {
         let mut data_paths = BTreeMap::new();
         for asset in &manifest.assets {
             let path = directory.join(&asset.file_name);
-            validate_asset_bytes(&path, asset.size_bytes, asset.sha256.as_bytes())?;
+            match admission {
+                Admission::Full => {
+                    validate_asset_bytes(&path, asset.size_bytes, asset.sha256.as_bytes())?;
+                }
+                Admission::Installed => validate_asset_size(&path, asset.size_bytes)?,
+            }
             match asset.role.as_str() {
                 "index" => {
                     if asset.file_name != expected_index_name {
@@ -197,27 +273,21 @@ impl DictionaryPack {
         let index_path = index_path.ok_or_else(|| {
             PackError::Malformed("manifest does not declare an index asset".to_owned())
         })?;
-        let index = open_database(&index_path, INDEX_APPLICATION_ID, INDEX_SCHEMA)?;
+        let index = open_database(&index_path, INDEX_APPLICATION_ID, INDEX_SCHEMA, admission)?;
         let metadata = read_index_metadata(&index)?;
         cross_check_pack_metadata(&manifest, &pack_id, &revision, &metadata)?;
-        validate_index_relations(&index, &metadata)?;
+        if admission == Admission::Full {
+            validate_index_relations(&index, &metadata)?;
+        }
 
         let routes = read_shard_routes(&index)?;
-        let shards = open_shards(
-            &index,
-            &metadata,
-            &routes,
-            data_paths,
-            &manifest,
-            &pack_id,
-            &revision_hex,
-        )?;
+        let shards = open_shards(&index, &metadata, &routes, data_paths, &manifest, admission)?;
 
         Ok(Self {
             directory,
             pack_id,
             revision,
-            corpus_language: metadata.corpus_language,
+            metadata,
             manifest,
             limits,
             index: Mutex::new(index),
@@ -242,7 +312,12 @@ impl DictionaryPack {
 
     #[must_use]
     pub fn corpus_language(&self) -> &str {
-        &self.corpus_language
+        &self.metadata.corpus_language
+    }
+
+    #[must_use]
+    pub const fn metadata(&self) -> &PackMetadata {
+        &self.metadata
     }
 
     #[must_use]
@@ -254,7 +329,7 @@ impl DictionaryPack {
     /// and lookup route.
     ///
     /// This explicit qualification operation scans the complete corpus. Ordinary
-    /// [`Self::open`] remains limited to envelope and relational admission checks.
+    /// admission remains limited to envelope and relational checks.
     ///
     /// # Errors
     ///
@@ -287,6 +362,38 @@ impl DictionaryPack {
             ));
         }
         validation.finish(self, &metadata, &index)
+    }
+
+    /// Scans every authenticated record and collects its audio references.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any record fails authentication or has a malformed
+    /// `sounds` structure.
+    pub fn audio_references(&self) -> Result<AudioReferences, PackError> {
+        let entries = {
+            let index = lock(&self.index)?;
+            let mut statement = index.prepare(
+                "SELECT entry_id, selected_ordinal, source_line_number, source_byte_offset, \
+                 shard_ordinal, authored_headword, language_code, record_sha256 \
+                 FROM entries ORDER BY selected_ordinal",
+            )?;
+            statement
+                .query_map([], index_entry_from_row)?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut references = AudioReferences::default();
+        for entry in &entries {
+            let record = self.authenticate_record(entry)?;
+            for authored in record.routing.audio_values()? {
+                let target = match crate::commons_file_name(authored) {
+                    Some(file_name) => references.files.entry(file_name),
+                    None => references.invalid.entry(authored.to_owned()),
+                };
+                *target.or_insert(0) += 1;
+            }
+        }
+        Ok(references)
     }
 
     /// Performs the six-stage exact lookup and stops at the first non-empty stage.
@@ -340,8 +447,12 @@ impl DictionaryPack {
             let truncated = rows.len() > options.limit;
             let mut matches = Vec::with_capacity(rows.len().min(options.limit));
             for row in rows.into_iter().take(options.limit) {
-                let entry = self.load_record(&row, class, key, target_language)?;
-                matches.push(LookupMatch { entry });
+                let entry =
+                    self.load_record(&row, class, key, options.projection, target_language)?;
+                matches.push(LookupMatch {
+                    match_class: class,
+                    entry,
+                });
             }
             return Ok(LookupOutcome { matches, truncated });
         }
@@ -387,8 +498,9 @@ impl DictionaryPack {
         index: &IndexEntry,
         class: MatchClass,
         lookup_key: &[u8],
+        projection: ProjectionOptions,
         target_language: Option<&str>,
-    ) -> Result<EntrySummary, PackError> {
+    ) -> Result<Entry, PackError> {
         let authenticated = self.authenticate_record(index)?;
         let selected_ordinal = authenticated.selected_ordinal;
         if !routing_matches(&authenticated.routing, class, lookup_key) {
@@ -396,15 +508,110 @@ impl DictionaryPack {
                 "record {selected_ordinal} does not authenticate its lookup route"
             )));
         }
-        self.project_record(&authenticated, class, target_language)
+        self.project_record(&authenticated, projection, target_language)
+    }
+
+    /// Reads and projects one entry of this pack by reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackError::UnknownEntry`] when the reference belongs to another pack
+    /// or revision or names no entry, and record-authentication errors otherwise.
+    pub fn entry(
+        &self,
+        reference: &EntryReference,
+        projection: ProjectionOptions,
+    ) -> Result<Entry, PackError> {
+        self.entry_for_language(reference, projection, None)
+    }
+
+    pub(crate) fn entry_for_language(
+        &self,
+        reference: &EntryReference,
+        projection: ProjectionOptions,
+        target_language: Option<&str>,
+    ) -> Result<Entry, PackError> {
+        let authenticated = self.authenticate_reference(reference)?;
+        self.project_record(&authenticated, projection, target_language)
+    }
+
+    /// Reads one page of one section of an entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackError::Limit`] when `limit` is zero or exceeds the configured
+    /// page size, and the errors of [`Self::entry`].
+    pub fn section_page(
+        &self,
+        reference: &EntryReference,
+        section: Section,
+        offset: usize,
+        limit: usize,
+        projection: ProjectionOptions,
+    ) -> Result<SectionPage, PackError> {
+        self.section_page_for_language(reference, section, offset, limit, projection, None)
+    }
+
+    pub(crate) fn section_page_for_language(
+        &self,
+        reference: &EntryReference,
+        section: Section,
+        offset: usize,
+        limit: usize,
+        projection: ProjectionOptions,
+        target_language: Option<&str>,
+    ) -> Result<SectionPage, PackError> {
+        if limit == 0 || limit > self.limits.max_section_page_items {
+            return Err(PackError::Limit(format!(
+                "section page limit must be between 1 and {}",
+                self.limits.max_section_page_items
+            )));
+        }
+        let authenticated = self.authenticate_reference(reference)?;
+        authenticated
+            .routing
+            .section(section, offset, limit, projection, target_language)
+    }
+
+    fn authenticate_reference(
+        &self,
+        reference: &EntryReference,
+    ) -> Result<AuthenticatedRecord, PackError> {
+        if reference.pack_id != self.pack_id || reference.pack_revision != self.revision {
+            return Err(PackError::UnknownEntry);
+        }
+        let row = {
+            let index = lock(&self.index)?;
+            let mut statement = index.prepare_cached(
+                "SELECT entry_id, selected_ordinal, source_line_number, source_byte_offset, \
+                 shard_ordinal, authored_headword, language_code, record_sha256 \
+                 FROM entries WHERE entry_id = ?1",
+            )?;
+            let mut rows = statement.query_map(
+                [reference.entry_id.as_bytes().as_slice()],
+                index_entry_from_row,
+            )?;
+            rows.next().transpose()?
+        };
+        let row = row.ok_or(PackError::UnknownEntry)?;
+        let authenticated = self.authenticate_record(&row)?;
+        if authenticated.selected_ordinal != reference.selected_ordinal {
+            return Err(PackError::UnknownEntry);
+        }
+        Ok(authenticated)
     }
 
     fn project_record(
         &self,
         authenticated: &AuthenticatedRecord,
-        class: MatchClass,
+        projection: ProjectionOptions,
         target_language: Option<&str>,
-    ) -> Result<EntrySummary, PackError> {
+    ) -> Result<Entry, PackError> {
+        if projection.text_bytes == 0 {
+            return Err(PackError::Limit(
+                "projection text bound must be greater than zero".to_owned(),
+            ));
+        }
         authenticated.routing.project(
             EntryReference {
                 pack_id: self.pack_id.clone(),
@@ -412,8 +619,7 @@ impl DictionaryPack {
                 entry_id: authenticated.entry_id,
                 selected_ordinal: authenticated.selected_ordinal,
             },
-            class,
-            self.limits.semantic(),
+            projection,
             target_language,
         )
     }
@@ -589,7 +795,7 @@ impl ValidationState {
             ));
         }
         let authenticated = pack.authenticate_record(entry)?;
-        pack.project_record(&authenticated, MatchClass::AuthoredHeadword, None)
+        pack.project_record(&authenticated, ProjectionOptions::exhaustive(), None)
             .map_err(|error| contextualize_record_error(ordinal, error))?;
         frame_record(
             &mut self.selected_digest,
@@ -663,7 +869,7 @@ impl ValidationState {
     fn finish(
         self,
         pack: &DictionaryPack,
-        metadata: &IndexMetadata,
+        metadata: &PackMetadata,
         index: &Connection,
     ) -> Result<ValidationReport, PackError> {
         if self.record_count != metadata.record_count
@@ -697,32 +903,34 @@ impl ValidationState {
     }
 }
 
-struct IndexMetadata {
-    pack_id: String,
-    revision: [u8; 32],
-    corpus_language: String,
-    wiktionary_edition: String,
-    wiktionary_dump_date: String,
-    kaikki_extraction_date: String,
-    source_url: String,
-    compressed_source_sha256: [u8; 32],
-    uncompressed_source_sha256: [u8; 32],
-    wiktextract_revision: String,
-    wikitextprocessor_revision: String,
-    builder_revision: String,
-    unicode_profile: String,
-    compression_profile: String,
-    routing_policy: String,
-    target_shard_payload_bytes: u64,
-    record_count: u64,
-    record_bytes: u64,
-    record_digest: [u8; 32],
-    source_manifest_sha256: [u8; 32],
-    source_manifest_json: String,
-    license_manifest_sha256: [u8; 32],
-    license_manifest_json: String,
-    compatible_audio_collection: Option<String>,
-    minimum_app_version: String,
+/// Authenticated identity, provenance, and license facts from the pack index.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackMetadata {
+    pub pack_id: String,
+    pub revision: [u8; 32],
+    pub corpus_language: String,
+    pub wiktionary_edition: String,
+    pub wiktionary_dump_date: String,
+    pub kaikki_extraction_date: String,
+    pub source_url: String,
+    pub compressed_source_sha256: [u8; 32],
+    pub uncompressed_source_sha256: [u8; 32],
+    pub wiktextract_revision: String,
+    pub wikitextprocessor_revision: String,
+    pub builder_revision: String,
+    pub unicode_profile: String,
+    pub compression_profile: String,
+    pub routing_policy: String,
+    pub target_shard_payload_bytes: u64,
+    pub record_count: u64,
+    pub record_bytes: u64,
+    pub record_digest: [u8; 32],
+    pub source_manifest_sha256: [u8; 32],
+    pub source_manifest_json: String,
+    pub license_manifest_sha256: [u8; 32],
+    pub license_manifest_json: String,
+    pub compatible_audio_collection: Option<String>,
+    pub minimum_app_version: String,
 }
 
 #[derive(Clone)]
@@ -790,7 +998,7 @@ fn validate_manifest(manifest: &PackManifest, limits: PackLimits) -> Result<(), 
     Ok(())
 }
 
-fn safe_asset_name(name: &str) -> Result<(), PackError> {
+pub(crate) fn safe_asset_name(name: &str) -> Result<(), PackError> {
     let mut components = Path::new(name).components();
     let safe = !name.is_empty()
         && !name.contains('\\')
@@ -805,7 +1013,7 @@ fn safe_asset_name(name: &str) -> Result<(), PackError> {
     }
 }
 
-fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, PackError> {
+pub(crate) fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, PackError> {
     let metadata = fs::symlink_metadata(path).map_err(|source| io_error(path, source))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum {
         return Err(PackError::Limit(format!(
@@ -816,7 +1024,7 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, PackError> {
     fs::read(path).map_err(|source| io_error(path, source))
 }
 
-fn validate_asset_bytes(path: &Path, size: u64, expected: &[u8; 32]) -> Result<(), PackError> {
+pub(crate) fn validate_asset_size(path: &Path, size: u64) -> Result<(), PackError> {
     let metadata = fs::symlink_metadata(path).map_err(|source| io_error(path, source))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != size {
         return Err(PackError::Corrupt(format!(
@@ -824,6 +1032,15 @@ fn validate_asset_bytes(path: &Path, size: u64, expected: &[u8; 32]) -> Result<(
             path.display()
         )));
     }
+    Ok(())
+}
+
+pub(crate) fn validate_asset_bytes(
+    path: &Path,
+    size: u64,
+    expected: &[u8; 32],
+) -> Result<(), PackError> {
+    validate_asset_size(path, size)?;
     let mut file = File::open(path).map_err(|source| io_error(path, source))?;
     let mut digest = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
@@ -845,10 +1062,11 @@ fn validate_asset_bytes(path: &Path, size: u64, expected: &[u8; 32]) -> Result<(
     Ok(())
 }
 
-fn open_database(
+pub(crate) fn open_database(
     path: &Path,
     application_id: u32,
     expected_schema: &str,
+    admission: Admission,
 ) -> Result<Connection, PackError> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.execute_batch("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;")?;
@@ -869,12 +1087,15 @@ fn open_database(
             path.display()
         )));
     }
-    let integrity: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    if integrity != "ok" {
-        return Err(PackError::Corrupt(format!(
-            "SQLite integrity check failed for `{}`: {integrity}",
-            path.display()
-        )));
+    if admission == Admission::Full {
+        let integrity: String =
+            connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(PackError::Corrupt(format!(
+                "SQLite integrity check failed for `{}`: {integrity}",
+                path.display()
+            )));
+        }
     }
     let actual_objects = schema_objects(&connection)?;
     let expected_connection = Connection::open_in_memory()?;
@@ -889,7 +1110,7 @@ fn open_database(
     Ok(connection)
 }
 
-fn schema_objects(
+pub(crate) fn schema_objects(
     connection: &Connection,
 ) -> Result<BTreeSet<(String, String, String, String)>, PackError> {
     let mut statement = connection.prepare(
@@ -902,7 +1123,7 @@ fn schema_objects(
     rows.collect::<Result<_, _>>().map_err(PackError::from)
 }
 
-fn read_index_metadata(connection: &Connection) -> Result<IndexMetadata, PackError> {
+fn read_index_metadata(connection: &Connection) -> Result<PackMetadata, PackError> {
     let count: i64 =
         connection.query_row("SELECT count(*) FROM pack_metadata", [], |row| row.get(0))?;
     if count != 1 {
@@ -922,7 +1143,7 @@ fn read_index_metadata(connection: &Connection) -> Result<IndexMetadata, PackErr
          FROM pack_metadata WHERE singleton = 1",
         [],
         |row| {
-            Ok(RawIndexMetadata {
+            Ok(RawPackMetadata {
                 pack_id: row.get(0)?,
                 revision: row.get(1)?,
                 corpus_language: row.get(2)?,
@@ -951,7 +1172,7 @@ fn read_index_metadata(connection: &Connection) -> Result<IndexMetadata, PackErr
             })
         },
     )?;
-    Ok(IndexMetadata {
+    Ok(PackMetadata {
         pack_id: raw.pack_id,
         revision: bytes32("pack revision", &raw.revision)?,
         corpus_language: raw.corpus_language,
@@ -989,7 +1210,7 @@ fn read_index_metadata(connection: &Connection) -> Result<IndexMetadata, PackErr
     })
 }
 
-struct RawIndexMetadata {
+struct RawPackMetadata {
     pack_id: String,
     revision: Vec<u8>,
     corpus_language: String,
@@ -1021,7 +1242,7 @@ fn cross_check_pack_metadata(
     manifest: &PackManifest,
     pack_id: &PackId,
     revision: &PackRevision,
-    metadata: &IndexMetadata,
+    metadata: &PackMetadata,
 ) -> Result<(), PackError> {
     authenticate_manifest_json(
         "source manifest",
@@ -1092,7 +1313,7 @@ fn authenticate_manifest_json(
 
 fn validate_index_relations(
     connection: &Connection,
-    metadata: &IndexMetadata,
+    metadata: &PackMetadata,
 ) -> Result<(), PackError> {
     let foreign_keys: i64 =
         connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
@@ -1156,19 +1377,21 @@ fn read_shard_routes(connection: &Connection) -> Result<Vec<ShardRoute>, PackErr
 
 fn open_shards(
     index: &Connection,
-    metadata: &IndexMetadata,
+    metadata: &PackMetadata,
     routes: &[ShardRoute],
     mut data_paths: BTreeMap<String, PathBuf>,
     manifest: &PackManifest,
-    pack_id: &PackId,
-    revision_hex: &str,
+    admission: Admission,
 ) -> Result<Vec<DataShard>, PackError> {
+    let revision_hex = hex::encode(metadata.revision);
     if routes.len() != data_paths.len() {
         return Err(PackError::Corrupt(
             "manifest and index declare different data-shard counts".to_owned(),
         ));
     }
-    validate_shard_routes(index, metadata, routes)?;
+    if admission == Admission::Full {
+        validate_shard_routes(index, metadata, routes)?;
+    }
     let mut shards = Vec::with_capacity(routes.len());
     for (position, route) in routes.iter().enumerate() {
         let expected_ordinal = u64::try_from(position)
@@ -1180,7 +1403,7 @@ fn open_shards(
         }
         let expected_name = format!(
             "{}-{revision_hex}-data-{expected_ordinal:03}.eldict",
-            pack_id.as_str()
+            metadata.pack_id
         );
         if route.file_name != expected_name {
             return Err(PackError::Malformed(format!(
@@ -1207,8 +1430,8 @@ fn open_shards(
                 route.file_name
             )));
         }
-        let connection = open_database(&path, DATA_APPLICATION_ID, DATA_SCHEMA)?;
-        validate_shard(&connection, metadata, route)?;
+        let connection = open_database(&path, DATA_APPLICATION_ID, DATA_SCHEMA, admission)?;
+        validate_shard(&connection, metadata, route, admission)?;
         shards.push(DataShard {
             ordinal: route.ordinal,
             route: route.clone(),
@@ -1220,7 +1443,7 @@ fn open_shards(
 
 fn validate_shard_routes(
     connection: &Connection,
-    metadata: &IndexMetadata,
+    metadata: &PackMetadata,
     routes: &[ShardRoute],
 ) -> Result<(), PackError> {
     let mut next_ordinal = 0_u64;
@@ -1274,8 +1497,9 @@ fn validate_shard_routes(
 
 fn validate_shard(
     connection: &Connection,
-    metadata: &IndexMetadata,
+    metadata: &PackMetadata,
     route: &ShardRoute,
+    admission: Admission,
 ) -> Result<(), PackError> {
     let count: i64 =
         connection.query_row("SELECT count(*) FROM shard_metadata", [], |row| row.get(0))?;
@@ -1302,6 +1526,34 @@ fn validate_shard(
             ))
         },
     )?;
+    let metadata_consistent = shard.0 == metadata.pack_id
+        && bytes32("shard pack revision", &shard.1)? == metadata.revision
+        && nonnegative("shard metadata ordinal", shard.2)? == route.ordinal
+        && shard.3 == metadata.corpus_language
+        && positive("shard metadata count", shard.4)? == route.record_count
+        && nonnegative("shard metadata first ordinal", shard.5)? == route.first
+        && nonnegative("shard metadata last ordinal", shard.6)? == route.last
+        && bytes32("shard metadata digest", &shard.7)? == route.record_digest
+        && route
+            .last
+            .checked_sub(route.first)
+            .and_then(|value| value.checked_add(1))
+            == Some(route.record_count);
+    let consistent = metadata_consistent
+        && (admission == Admission::Installed || shard_records_match_route(connection, route)?);
+    if !consistent {
+        return Err(PackError::Corrupt(format!(
+            "data-shard metadata mismatch for ordinal {}",
+            route.ordinal
+        )));
+    }
+    Ok(())
+}
+
+fn shard_records_match_route(
+    connection: &Connection,
+    route: &ShardRoute,
+) -> Result<bool, PackError> {
     let aggregate: (i64, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = connection
         .query_row(
             "SELECT count(*), min(selected_ordinal), max(selected_ordinal), \
@@ -1317,32 +1569,15 @@ fn validate_shard(
                 ))
             },
         )?;
-    let consistent = shard.0 == metadata.pack_id
-        && bytes32("shard pack revision", &shard.1)? == metadata.revision
-        && nonnegative("shard metadata ordinal", shard.2)? == route.ordinal
-        && shard.3 == metadata.corpus_language
-        && positive("shard metadata count", shard.4)? == route.record_count
-        && nonnegative("shard metadata first ordinal", shard.5)? == route.first
-        && nonnegative("shard metadata last ordinal", shard.6)? == route.last
-        && bytes32("shard metadata digest", &shard.7)? == route.record_digest
-        && nonnegative("shard row count", aggregate.0)? == route.record_count
-        && aggregate.1.and_then(|value| u64::try_from(value).ok()) == Some(route.first)
-        && aggregate.2.and_then(|value| u64::try_from(value).ok()) == Some(route.last)
-        && aggregate.3.and_then(|value| u64::try_from(value).ok()) == Some(route.compressed_bytes)
-        && aggregate.4.and_then(|value| u64::try_from(value).ok())
-            == Some(route.uncompressed_bytes)
-        && route
-            .last
-            .checked_sub(route.first)
-            .and_then(|value| value.checked_add(1))
-            == Some(route.record_count);
-    if !consistent {
-        return Err(PackError::Corrupt(format!(
-            "data-shard metadata mismatch for ordinal {}",
-            route.ordinal
-        )));
-    }
-    Ok(())
+    Ok(
+        nonnegative("shard row count", aggregate.0)? == route.record_count
+            && aggregate.1.and_then(|value| u64::try_from(value).ok()) == Some(route.first)
+            && aggregate.2.and_then(|value| u64::try_from(value).ok()) == Some(route.last)
+            && aggregate.3.and_then(|value| u64::try_from(value).ok())
+                == Some(route.compressed_bytes)
+            && aggregate.4.and_then(|value| u64::try_from(value).ok())
+                == Some(route.uncompressed_bytes),
+    )
 }
 
 fn routing_matches(record: &RoutingRecord, class: MatchClass, key: &[u8]) -> bool {
@@ -1475,17 +1710,17 @@ impl FramedDigest {
     }
 }
 
-fn bytes32(name: &str, bytes: &[u8]) -> Result<[u8; 32], PackError> {
+pub(crate) fn bytes32(name: &str, bytes: &[u8]) -> Result<[u8; 32], PackError> {
     bytes
         .try_into()
         .map_err(|_| PackError::Corrupt(format!("{name} is not 32 bytes")))
 }
 
-fn nonnegative(name: &str, value: i64) -> Result<u64, PackError> {
+pub(crate) fn nonnegative(name: &str, value: i64) -> Result<u64, PackError> {
     u64::try_from(value).map_err(|_| PackError::Corrupt(format!("{name} is negative")))
 }
 
-fn positive(name: &str, value: i64) -> Result<u64, PackError> {
+pub(crate) fn positive(name: &str, value: i64) -> Result<u64, PackError> {
     let value = nonnegative(name, value)?;
     if value == 0 {
         Err(PackError::Corrupt(format!("{name} is zero")))
@@ -1503,13 +1738,13 @@ fn contextualize_record_error(selected_ordinal: u64, error: PackError) -> PackEr
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, PackError> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, PackError> {
     mutex
         .lock()
         .map_err(|_| PackError::Corrupt("database lock was poisoned".to_owned()))
 }
 
-fn io_error(path: &Path, source: io::Error) -> PackError {
+pub(crate) fn io_error(path: &Path, source: io::Error) -> PackError {
     PackError::Io {
         path: path.to_owned(),
         source,
