@@ -251,11 +251,33 @@ impl AcquisitionState {
     ///
     /// Returns storage errors.
     pub fn names_in_phase(&self, phase: Phase, limit: usize) -> Result<Vec<String>, BuildError> {
+        self.names_in_phase_after(phase, None, limit)
+    }
+
+    /// Names in one phase after `cursor`, so a caller can walk the whole phase in order.
+    ///
+    /// A sharded run needs this: taking the first rows every time would keep returning
+    /// names that belong to another shard.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the state database cannot be read.
+    pub fn names_in_phase_after(
+        &self,
+        phase: Phase,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, BuildError> {
         let mut statement = self.connection.prepare_cached(
-            "SELECT file_name FROM files WHERE phase = ?1 ORDER BY file_name LIMIT ?2",
+            "SELECT file_name FROM files WHERE phase = ?1 AND file_name > ?2 \
+             ORDER BY file_name LIMIT ?3",
         )?;
         let rows = statement.query_map(
-            params![phase.as_str(), i64::try_from(limit).unwrap_or(i64::MAX)],
+            params![
+                phase.as_str(),
+                cursor.unwrap_or(""),
+                i64::try_from(limit).unwrap_or(i64::MAX)
+            ],
             |row| row.get(0),
         )?;
         Ok(rows.collect::<Result<_, _>>()?)

@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use sha1::{Digest, Sha1};
@@ -13,33 +14,61 @@ use crate::BuildError;
 use crate::audio_state::{AcquisitionState, CommonsFacts, Phase, original_path};
 use crate::builder::io_error;
 
+/// The most concurrent media downloads the Wikimedia robot policy permits.
+pub const MAX_DOWNLOAD_CONCURRENCY: usize = 2;
+
 /// Controls for one acquisition run.
 #[derive(Clone, Debug)]
 pub struct AcquireOptions {
     pub api_url: String,
-    /// Identifies the project and a contact address, as Wikimedia requires.
+    /// A Wikimedia User-Agent policy identifier naming the bot and a contact.
     pub user_agent: String,
+    /// Capped at [`MAX_DOWNLOAD_CONCURRENCY`].
     pub download_workers: usize,
+    /// Total media download speed across workers.
+    pub download_bytes_per_second: u64,
     pub max_original_bytes: u64,
     /// Failed files are retried until they have failed this many times.
     pub max_attempts: u64,
-    /// Attempts per HTTP request before a run stops or a file fails.
+    /// Attempts per request after network errors or server errors.
     pub request_attempts: u32,
-    /// Base delay for exponential backoff when no `Retry-After` is given.
+    /// Base delay for exponential backoff after network errors.
     pub backoff: Duration,
+    /// Pause after a rate limit that gives no `Retry-After`.
+    pub rate_limit_pause: Duration,
+    /// Pause of every request after a server error.
+    pub server_error_pause: Duration,
+    /// Consecutive rate limits after which the run stops.
+    pub max_consecutive_rate_limits: u32,
+    /// One slice of the work, as `(ordinal, total)` with `ordinal` in `1..=total`.
+    ///
+    /// Slices are disjoint and derived from the file name, so several machines can run
+    /// against copies of the same state without coordinating. Originals are content
+    /// addressed, so their directories merge by copying.
+    pub shard: Option<(u32, u32)>,
 }
 
 impl AcquireOptions {
+    /// Wikimedia Commons with the robot policy's media limits: two concurrent
+    /// downloads, 25 Mbps, and a 15 minute pause after server errors.
     #[must_use]
-    pub fn commons(user_agent: String) -> Self {
+    pub fn commons(contact: &str) -> Self {
         Self {
             api_url: "https://commons.wikimedia.org/w/api.php".to_owned(),
-            user_agent,
-            download_workers: 4,
+            user_agent: format!(
+                "ElephantLadderDictionaryBot/{} ({contact}) ureq/3",
+                env!("CARGO_PKG_VERSION")
+            ),
+            download_workers: MAX_DOWNLOAD_CONCURRENCY,
+            download_bytes_per_second: 25_000_000 / 8,
             max_original_bytes: 20 * 1024 * 1024,
             max_attempts: 3,
             request_attempts: 6,
             backoff: Duration::from_secs(5),
+            rate_limit_pause: Duration::from_secs(60),
+            server_error_pause: Duration::from_secs(15 * 60),
+            max_consecutive_rate_limits: 10,
+            shard: None,
         }
     }
 }
@@ -73,21 +102,34 @@ pub fn acquire(
         .build()
         .new_agent();
     state.retry_failed(options.max_attempts)?;
+    let throttle = Throttle::new(options);
 
+    let mut cursor: Option<String> = None;
     loop {
-        let names = state.names_in_phase(Phase::Pending, API_BATCH)?;
-        if names.is_empty() {
+        let names = state.names_in_phase_after(Phase::Pending, cursor.as_deref(), API_BATCH)?;
+        let Some(last) = names.last().cloned() else {
             break;
+        };
+        let mine = retain_shard(names, options.shard);
+        if !mine.is_empty() {
+            resolve_batch(state, &agent, options, &throttle, &mine)?;
         }
-        resolve_batch(state, &agent, options, &names)?;
+        // A sharded run leaves other shards' names in place, so it walks past them.
+        cursor = options.shard.map(|_| last);
     }
 
+    let mut cursor: Option<String> = None;
     loop {
-        let names = state.names_in_phase(Phase::Resolved, DOWNLOAD_BATCH)?;
-        if names.is_empty() {
+        let names =
+            state.names_in_phase_after(Phase::Resolved, cursor.as_deref(), DOWNLOAD_BATCH)?;
+        let Some(last) = names.last().cloned() else {
             break;
+        };
+        let mine = retain_shard(names, options.shard);
+        if !mine.is_empty() {
+            download_batch(state, &agent, options, &throttle, mine)?;
         }
-        download_batch(state, &agent, options, names)?;
+        cursor = options.shard.map(|_| last);
     }
 
     let completed = state.complete_if_settled(&utc_now())?;
@@ -99,10 +141,32 @@ pub fn acquire(
     Ok(AcquireReport { phases, completed })
 }
 
+/// Keeps the names belonging to this run's shard.
+fn retain_shard(names: Vec<String>, shard: Option<(u32, u32)>) -> Vec<String> {
+    let Some((ordinal, total)) = shard else {
+        return names;
+    };
+    names
+        .into_iter()
+        .filter(|name| shard_of(name, total) == ordinal)
+        .collect()
+}
+
+/// The shard a file name belongs to, from a stable hash so every machine agrees.
+fn shard_of(name: &str, total: u32) -> u32 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in name.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    u32::try_from(hash % u64::from(total)).unwrap_or(0) + 1
+}
+
 fn resolve_batch(
     state: &AcquisitionState,
     agent: &ureq::Agent,
     options: &AcquireOptions,
+    throttle: &Throttle,
     names: &[String],
 ) -> Result<(), BuildError> {
     let titles = names
@@ -124,39 +188,27 @@ fn resolve_batch(
         ),
         ("titles", titles.as_str()),
     ];
-    let response: Value = with_retries(options, "Commons API query", |attempt| {
+    let response: Value = request(throttle, options, || {
         let mut response = agent
             .post(&options.api_url)
             .send_form(form)
-            .map_err(|error| Attempt::Retry(error.to_string(), None))?;
-        let retry_after = retry_after(response.headers());
-        let status = response.status().as_u16();
-        if matches!(status, 429 | 500 | 502 | 503 | 504) {
-            return Err(Attempt::Retry(format!("HTTP {status}"), retry_after));
-        }
-        if status != 200 {
-            return Err(Attempt::Fatal(format!("HTTP {status}")));
-        }
+            .map_err(|error| Attempt::Transient(error.to_string()))?;
+        check_status(&response)?;
         let body = response
             .body_mut()
             .with_config()
             .limit(MAX_API_BYTES)
             .read_to_vec()
-            .map_err(|error| Attempt::Retry(error.to_string(), None))?;
+            .map_err(|error| Attempt::Transient(error.to_string()))?;
         let value: Value = serde_json::from_slice(&body)
             .map_err(|error| Attempt::Fatal(format!("invalid API JSON: {error}")))?;
-        if let Some(code) = value.pointer("/error/code").and_then(Value::as_str) {
-            return if code == "maxlag" {
-                Err(Attempt::Retry(
-                    format!("maxlag on attempt {attempt}"),
-                    retry_after,
-                ))
-            } else {
-                Err(Attempt::Fatal(format!("API error `{code}`")))
-            };
+        match value.pointer("/error/code").and_then(Value::as_str) {
+            Some("maxlag") => Err(Attempt::RateLimited(retry_after(response.headers()))),
+            Some(code) => Err(Attempt::Fatal(format!("API error `{code}`"))),
+            None => Ok((value, 0)),
         }
-        Ok(value)
-    })?;
+    })
+    .map_err(|error| BuildError::InvalidManifest(format!("Commons API query stopped: {error}")))?;
 
     let mut aliases = BTreeMap::new();
     for key in ["normalized", "redirects"] {
@@ -218,12 +270,14 @@ fn page_facts(title: &str, page: &Value) -> Option<CommonsFacts> {
 enum Outcome {
     Downloaded,
     Failed(String),
+    Stopped(String),
 }
 
 fn download_batch(
     state: &AcquisitionState,
     agent: &ureq::Agent,
     options: &AcquireOptions,
+    throttle: &Throttle,
     names: Vec<String>,
 ) -> Result<(), BuildError> {
     let mut jobs = VecDeque::new();
@@ -237,17 +291,24 @@ fn download_batch(
         jobs.push_back((name, facts));
     }
     let jobs = Mutex::new(jobs);
+    let stopped = AtomicBool::new(false);
     let (sender, receiver) = mpsc::channel();
     let directory = state.directory().to_owned();
     thread::scope(|scope| -> Result<(), BuildError> {
-        for _ in 0..options.download_workers.max(1) {
+        for _ in 0..options.download_workers.clamp(1, MAX_DOWNLOAD_CONCURRENCY) {
             let sender = sender.clone();
-            let (jobs, directory) = (&jobs, &directory);
+            let (jobs, directory, stopped) = (&jobs, &directory, &stopped);
             scope.spawn(move || {
-                while let Some((name, facts)) =
-                    jobs.lock().ok().and_then(|mut jobs| jobs.pop_front())
-                {
-                    let outcome = download_one(agent, options, directory, &facts);
+                while !stopped.load(Ordering::Acquire) {
+                    let Some((name, facts)) =
+                        jobs.lock().ok().and_then(|mut jobs| jobs.pop_front())
+                    else {
+                        return;
+                    };
+                    let outcome = download_one(agent, options, throttle, directory, &facts);
+                    if matches!(outcome, Outcome::Stopped(_)) {
+                        stopped.store(true, Ordering::Release);
+                    }
                     if sender.send((name, outcome)).is_err() {
                         return;
                     }
@@ -255,19 +316,27 @@ fn download_batch(
             });
         }
         drop(sender);
+        let mut stop = None;
         for (name, outcome) in receiver {
             match outcome {
                 Outcome::Downloaded => state.set_phase(&name, Phase::Downloaded, None)?,
                 Outcome::Failed(reason) => state.set_phase(&name, Phase::Failed, Some(&reason))?,
+                Outcome::Stopped(reason) => stop = Some(reason),
             }
         }
-        Ok(())
+        match stop {
+            Some(reason) => Err(BuildError::InvalidManifest(format!(
+                "downloads stopped: {reason}"
+            ))),
+            None => Ok(()),
+        }
     })
 }
 
 fn download_one(
     agent: &ureq::Agent,
     options: &AcquireOptions,
+    throttle: &Throttle,
     directory: &std::path::Path,
     facts: &CommonsFacts,
 ) -> Outcome {
@@ -281,33 +350,40 @@ fn download_one(
             options.max_original_bytes
         ));
     }
-    let bytes = match with_retries(options, "download", |_| {
+    let bytes = match request(throttle, options, || {
         let mut response = agent
             .get(&facts.original_url)
             .call()
-            .map_err(|error| Attempt::Retry(error.to_string(), None))?;
-        let status = response.status().as_u16();
-        if matches!(status, 429 | 500 | 502 | 503 | 504) {
-            return Err(Attempt::Retry(
-                format!("HTTP {status}"),
-                retry_after(response.headers()),
-            ));
-        }
-        if status != 200 {
-            return Err(Attempt::Fatal(format!("HTTP {status}")));
-        }
-        response
+            .map_err(|error| Attempt::Transient(error.to_string()))?;
+        check_status(&response)?;
+        let bytes = response
             .body_mut()
             .with_config()
             .limit(options.max_original_bytes)
             .read_to_vec()
-            .map_err(|error| Attempt::Retry(error.to_string(), None))
+            .map_err(|error| Attempt::Transient(error.to_string()))?;
+        let size = bytes.len() as u64;
+        Ok((bytes, size))
     }) {
         Ok(bytes) => bytes,
-        Err(error) => return Outcome::Failed(error.to_string()),
+        Err(RequestError::Stopped(reason)) => return Outcome::Stopped(reason),
+        Err(RequestError::Failed(reason)) => return Outcome::Failed(reason),
     };
     if hex::encode(Sha1::digest(&bytes)) != facts.sha1 {
-        return Outcome::Failed("download does not match the Commons SHA-1".to_owned());
+        // A complete transfer whose digest still disagrees means Commons' own metadata
+        // does not describe the bytes it serves, and retrying will never fix it.
+        return Outcome::Failed(if bytes.len() as u64 == facts.size_bytes {
+            format!(
+                "Commons served {} bytes whose SHA-1 does not match its own metadata",
+                bytes.len()
+            )
+        } else {
+            format!(
+                "download does not match the Commons SHA-1 ({} of {} bytes)",
+                bytes.len(),
+                facts.size_bytes
+            )
+        });
     }
     match store(&path, &bytes) {
         Ok(()) => Outcome::Downloaded,
@@ -329,34 +405,149 @@ fn store(path: &std::path::Path, bytes: &[u8]) -> Result<(), BuildError> {
 }
 
 enum Attempt {
-    Retry(String, Option<Duration>),
+    /// A network error; retried with backoff.
+    Transient(String),
+    /// HTTP 429 or API `maxlag`; every request pauses.
+    RateLimited(Option<Duration>),
+    /// HTTP 5xx; every request pauses for the server error pause.
+    ServerError(u16),
     Fatal(String),
 }
 
-fn with_retries<T>(
+enum RequestError {
+    /// The server keeps rate limiting; the whole run must stop.
+    Stopped(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stopped(reason) | Self::Failed(reason) => formatter.write_str(reason),
+        }
+    }
+}
+
+fn check_status(response: &ureq::http::Response<ureq::Body>) -> Result<(), Attempt> {
+    match response.status().as_u16() {
+        200 => Ok(()),
+        429 => Err(Attempt::RateLimited(retry_after(response.headers()))),
+        status @ 500..=599 => Err(Attempt::ServerError(status)),
+        status => Err(Attempt::Fatal(format!("HTTP {status}"))),
+    }
+}
+
+/// Pacing shared by every request of a run: rate limits and server errors pause
+/// all requests, and completed downloads pace later ones to the byte rate.
+struct Throttle {
+    resume_at: Mutex<Instant>,
+    consecutive_rate_limits: Mutex<u32>,
+    bytes_per_second: u64,
+    rate_limit_pause: Duration,
+    max_consecutive_rate_limits: u32,
+}
+
+impl Throttle {
+    fn new(options: &AcquireOptions) -> Self {
+        Self {
+            resume_at: Mutex::new(Instant::now()),
+            consecutive_rate_limits: Mutex::new(0),
+            bytes_per_second: options.download_bytes_per_second,
+            rate_limit_pause: options.rate_limit_pause,
+            max_consecutive_rate_limits: options.max_consecutive_rate_limits,
+        }
+    }
+
+    fn wait(&self) {
+        loop {
+            let resume_at = *self
+                .resume_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let now = Instant::now();
+            if now >= resume_at {
+                return;
+            }
+            thread::sleep(resume_at - now);
+        }
+    }
+
+    fn pause(&self, duration: Duration) {
+        let mut resume_at = self
+            .resume_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *resume_at = (*resume_at).max(Instant::now() + duration);
+    }
+
+    fn rate_limited(&self, retry_after: Option<Duration>) -> Result<(), RequestError> {
+        let mut count = self
+            .consecutive_rate_limits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *count += 1;
+        if *count > self.max_consecutive_rate_limits {
+            return Err(RequestError::Stopped(format!(
+                "rate limited {} consecutive times",
+                *count
+            )));
+        }
+        drop(count);
+        self.pause(retry_after.unwrap_or(self.rate_limit_pause));
+        Ok(())
+    }
+
+    fn completed(&self, bytes: u64) {
+        *self
+            .consecutive_rate_limits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = 0;
+        if self.bytes_per_second > 0 && bytes > 0 {
+            let delay =
+                Duration::from_nanos(bytes.saturating_mul(1_000_000_000) / self.bytes_per_second);
+            let mut resume_at = self
+                .resume_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *resume_at = (*resume_at).max(Instant::now()) + delay;
+        }
+    }
+}
+
+/// Runs one request under the shared throttle. The action returns its value and the
+/// bytes it transferred.
+fn request<T>(
+    throttle: &Throttle,
     options: &AcquireOptions,
-    operation: &str,
-    mut action: impl FnMut(u32) -> Result<T, Attempt>,
-) -> Result<T, BuildError> {
-    let mut attempt = 1;
+    mut action: impl FnMut() -> Result<(T, u64), Attempt>,
+) -> Result<T, RequestError> {
+    let mut failures = 0;
     loop {
-        match action(attempt) {
-            Ok(value) => return Ok(value),
-            Err(Attempt::Fatal(message)) => {
-                return Err(BuildError::InvalidManifest(format!(
-                    "{operation} failed: {message}"
-                )));
+        throttle.wait();
+        let reason = match action() {
+            Ok((value, bytes)) => {
+                throttle.completed(bytes);
+                return Ok(value);
             }
-            Err(Attempt::Retry(message, retry_after)) => {
-                if attempt >= options.request_attempts {
-                    return Err(BuildError::InvalidManifest(format!(
-                        "{operation} failed after {attempt} attempts: {message}"
-                    )));
-                }
-                let backoff = options.backoff.saturating_mul(1 << (attempt - 1).min(6));
-                thread::sleep(retry_after.unwrap_or(backoff).min(Duration::from_secs(600)));
-                attempt += 1;
+            Err(Attempt::Fatal(reason)) => return Err(RequestError::Failed(reason)),
+            Err(Attempt::RateLimited(retry_after)) => {
+                throttle.rate_limited(retry_after)?;
+                continue;
             }
+            Err(Attempt::ServerError(status)) => {
+                throttle.pause(options.server_error_pause);
+                format!("HTTP {status}")
+            }
+            Err(Attempt::Transient(reason)) => {
+                thread::sleep(options.backoff.saturating_mul(1 << failures.min(6)));
+                reason
+            }
+        };
+        failures += 1;
+        if failures >= options.request_attempts {
+            return Err(RequestError::Failed(format!(
+                "failed after {failures} attempts: {reason}"
+            )));
         }
     }
 }
@@ -401,4 +592,45 @@ pub fn utc_now() -> String {
         remainder % 3_600 / 60,
         remainder % 60
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{retain_shard, shard_of};
+
+    fn names() -> Vec<String> {
+        (0..500)
+            .map(|index| format!("LL-Q150 (fra)-Speaker-word{index}.wav"))
+            .collect()
+    }
+
+    #[test]
+    fn shards_are_disjoint_and_cover_every_name() {
+        let names = names();
+        let total = 3;
+        let mut seen = Vec::new();
+        for ordinal in 1..=total {
+            let mine = retain_shard(names.clone(), Some((ordinal, total)));
+            assert!(!mine.is_empty(), "shard {ordinal} of {total} has no work");
+            seen.extend(mine);
+        }
+        seen.sort();
+        let mut expected = names;
+        expected.sort();
+        // Every machine downloads a different slice, and together they leave nothing behind.
+        assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn a_name_always_belongs_to_the_same_shard() {
+        let name = "LL-Q150 (fra)-Speaker-cubi.wav";
+        assert_eq!(shard_of(name, 4), shard_of(name, 4));
+        assert!((1..=4).contains(&shard_of(name, 4)));
+        assert_eq!(shard_of(name, 1), 1);
+    }
+
+    #[test]
+    fn an_unsharded_run_keeps_every_name() {
+        assert_eq!(retain_shard(names(), None).len(), 500);
+    }
 }

@@ -1,9 +1,11 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{EntryId, PackError, PackId, PackRevision};
 
 /// The first non-empty exact-match stage used for an entry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 #[repr(u8)]
 pub enum MatchClass {
     AuthoredHeadword = 1,
@@ -25,7 +27,8 @@ pub struct EntryReference {
 
 /// A window of an authored list. Items start at `offset` within `total` authored or
 /// target-filtered items.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Bounded<T> {
     pub offset: usize,
     pub total: usize,
@@ -140,7 +143,8 @@ impl Default for ProjectionOptions {
 }
 
 /// An authored ruby annotation over base text.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Ruby {
     pub base: String,
     pub text: String,
@@ -148,14 +152,16 @@ pub struct Ruby {
 
 /// An authored emphasis range in Unicode scalar values, end exclusive. Ranges refer
 /// to the complete authored text and may exceed a bounded projection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EmphasisRange {
     pub start: u64,
     pub end: u64,
 }
 
 /// An authored reference to a lemma or alternative entry.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LemmaReference {
     pub word: String,
     pub extra: Option<String>,
@@ -208,7 +214,8 @@ pub struct AudioReference {
     pub file_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Hyphenation {
     pub parts: Vec<String>,
     pub sense: Option<String>,
@@ -217,7 +224,8 @@ pub struct Hyphenation {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Form {
     pub form: String,
     pub romanization: Option<String>,
@@ -237,7 +245,8 @@ pub struct Form {
 }
 
 /// An authored translation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Translation {
     /// May be absent when the authored translation is represented by a note.
     pub word: Option<String>,
@@ -262,7 +271,8 @@ pub struct Translation {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Example {
     pub text: Option<String>,
     pub text_emphasis: Vec<EmphasisRange>,
@@ -282,7 +292,8 @@ pub struct Example {
 }
 
 /// The authored relation list a [`Relation`] belongs to.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum RelationKind {
     Synonyms,
     Antonyms,
@@ -371,7 +382,8 @@ impl RelationKind {
 }
 
 /// One authored related term.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Relation {
     pub word: Option<String>,
     pub alt: Option<String>,
@@ -395,14 +407,16 @@ pub struct Relation {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RelationGroup {
     pub kind: RelationKind,
     pub relations: Bounded<Relation>,
 }
 
 /// One node of an authored descendant tree in depth-first order.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Descendant {
     /// Zero for top-level descendants.
     pub depth: u32,
@@ -418,7 +432,8 @@ pub struct Descendant {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Classifier {
     pub classifier: String,
     pub tags: Vec<String>,
@@ -426,7 +441,8 @@ pub struct Classifier {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Sense {
     pub glosses: Vec<String>,
     pub raw_glosses: Vec<String>,
@@ -1471,7 +1487,8 @@ impl<'a> Fields<'a> {
 /// `None` when the value is not a plausible file name.
 #[must_use]
 pub fn commons_file_name(authored: &str) -> Option<String> {
-    let trimmed = authored
+    let decoded = percent_decoded(authored);
+    let trimmed = decoded
         .trim()
         .trim_start_matches("File:")
         .trim_start_matches("file:");
@@ -1492,6 +1509,35 @@ pub fn commons_file_name(authored: &str) -> Option<String> {
     let mut characters = normalized.chars();
     let first = characters.next()?;
     Some(first.to_uppercase().chain(characters).collect())
+}
+
+/// Decodes `%XX` sequences the way `MediaWiki` decodes them in titles.
+///
+/// Authored `audio` values are sometimes percent encoded, and the encoded form names no
+/// file on Commons. A sequence that is not two hexadecimal digits, or that decodes to
+/// something that is not UTF-8, is left exactly as authored.
+fn percent_decoded(value: &str) -> String {
+    if !value.contains('%') {
+        return value.to_owned();
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let hex = (index + 2 < bytes.len())
+            .then(|| std::str::from_utf8(&bytes[index + 1..index + 3]).ok())
+            .flatten()
+            .filter(|_| bytes[index] == b'%')
+            .and_then(|digits| u8::from_str_radix(digits, 16).ok());
+        if let Some(byte) = hex {
+            decoded.push(byte);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| value.to_owned())
 }
 
 /// Places a list index inside a trailing quoted field name.
@@ -1604,6 +1650,29 @@ mod tests {
         assert_eq!(
             commons_file_name("File:fr-échelle.ogg").as_deref(),
             Some("Fr-échelle.ogg")
+        );
+        assert_eq!(
+            commons_file_name("LL-Q150 (fra)-Eihel-caravans%C3%A9rail.wav").as_deref(),
+            Some("LL-Q150 (fra)-Eihel-caravansérail.wav"),
+            "percent encoded values name no file on Commons until they are decoded"
+        );
+        assert_eq!(
+            commons_file_name("LL-Q150 (fra)-Axel toualy-ville h%C3%B4te.wav").as_deref(),
+            Some("LL-Q150 (fra)-Axel toualy-ville hôte.wav")
+        );
+        assert_eq!(
+            commons_file_name("Fr-100%25 sure.ogg").as_deref(),
+            Some("Fr-100% sure.ogg")
+        );
+        // A stray percent is authored text, not an escape.
+        assert_eq!(
+            commons_file_name("Fr-50% off.ogg").as_deref(),
+            Some("Fr-50% off.ogg")
+        );
+        assert_eq!(
+            commons_file_name("Fr-%FF%FE.ogg").as_deref(),
+            Some("Fr-%FF%FE.ogg"),
+            "a sequence that is not UTF-8 stays as authored"
         );
         assert_eq!(commons_file_name("no extension"), None);
         assert_eq!(commons_file_name("../escape.ogg"), None);

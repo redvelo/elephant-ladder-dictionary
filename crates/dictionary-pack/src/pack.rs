@@ -32,20 +32,24 @@ pub struct PackLimits {
     pub max_recording_bytes: u64,
 }
 
+impl PackLimits {
+    pub const DEFAULT: Self = Self {
+        max_manifest_bytes: 1024 * 1024,
+        max_assets: 256,
+        max_asset_bytes: 4 * 1024 * 1024 * 1024,
+        max_query_bytes: 4096,
+        max_lookup_results: 100,
+        max_compressed_record_bytes: 16 * 1024 * 1024,
+        max_uncompressed_record_bytes: 64 * 1024 * 1024,
+        max_routing_forms: 4096,
+        max_section_page_items: 256,
+        max_recording_bytes: 1024 * 1024,
+    };
+}
+
 impl Default for PackLimits {
     fn default() -> Self {
-        Self {
-            max_manifest_bytes: 1024 * 1024,
-            max_assets: 256,
-            max_asset_bytes: 4 * 1024 * 1024 * 1024,
-            max_query_bytes: 4096,
-            max_lookup_results: 100,
-            max_compressed_record_bytes: 16 * 1024 * 1024,
-            max_uncompressed_record_bytes: 64 * 1024 * 1024,
-            max_routing_forms: 4096,
-            max_section_page_items: 256,
-            max_recording_bytes: 1024 * 1024,
-        }
+        Self::DEFAULT
     }
 }
 

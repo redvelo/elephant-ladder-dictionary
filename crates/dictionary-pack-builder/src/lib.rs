@@ -11,7 +11,9 @@ mod snapshot;
 mod source;
 mod transcode;
 
-pub use audio_acquire::{AcquireOptions, AcquireReport, acquire, utc_now};
+pub use audio_acquire::{
+    AcquireOptions, AcquireReport, MAX_DOWNLOAD_CONCURRENCY, acquire, utc_now,
+};
 pub use audio_build::{
     AudioBuildOptions, AudioBuildResult, MAX_RECORDING_SECONDS, build_audio_collection,
 };

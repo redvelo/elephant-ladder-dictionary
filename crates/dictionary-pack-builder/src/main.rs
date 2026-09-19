@@ -223,19 +223,16 @@ fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), St
             references,
             "--state",
             state,
-            "--user-agent",
-            agent,
+            "--contact",
+            contact,
+            shard @ ..,
         ] => {
-            let references: ReferenceSet = read_json(references)?;
-            let state = AcquisitionState::open_or_create(Path::new(state), &references, &utc_now())
-                .map_err(|error| error.to_string())?;
-            let report = acquire(&state, &AcquireOptions::commons((*agent).to_owned()))
-                .map_err(|error| error.to_string())?;
-            for (phase, count) in report.phases {
-                println!("{phase}={count}");
-            }
-            println!("completed={}", report.completed);
-            Ok(())
+            let shard = match shard {
+                [] => None,
+                ["--shard", value] => Some(parse_shard(value)?),
+                _ => return Err(usage(program)),
+            };
+            run_acquire(references, state, contact, shard)
         }
         [
             "build",
@@ -360,6 +357,39 @@ fn run_source(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), S
     }
 }
 
+fn run_acquire(
+    references: &str,
+    state: &str,
+    contact: &str,
+    shard: Option<(u32, u32)>,
+) -> Result<(), String> {
+    let references: ReferenceSet = read_json(references)?;
+    let state = AcquisitionState::open_or_create(Path::new(state), &references, &utc_now())
+        .map_err(|error| error.to_string())?;
+    let options = AcquireOptions {
+        shard,
+        ..AcquireOptions::commons(contact)
+    };
+    let report = acquire(&state, &options).map_err(|error| error.to_string())?;
+    for (phase, count) in report.phases {
+        println!("{phase}={count}");
+    }
+    println!("completed={}", report.completed);
+    Ok(())
+}
+
+/// Parses `ordinal/total`, as in `2/3` for the second of three machines.
+fn parse_shard(value: &str) -> Result<(u32, u32), String> {
+    let invalid = || "shard must be ORDINAL/TOTAL, such as 2/3".to_owned();
+    let (ordinal, total) = value.split_once('/').ok_or_else(invalid)?;
+    let ordinal: u32 = ordinal.parse().map_err(|_| invalid())?;
+    let total: u32 = total.parse().map_err(|_| invalid())?;
+    if ordinal == 0 || total == 0 || ordinal > total {
+        return Err(invalid());
+    }
+    Ok((ordinal, total))
+}
+
 fn run_catalog(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), String> {
     let arguments = arguments
         .iter()
@@ -406,7 +436,7 @@ fn print_format_version() {
 
 fn usage(program: &std::ffi::OsStr) -> String {
     format!(
-        "usage: {program} format-version\n       {program} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --user-agent AGENT\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} source manifest --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION\n       {program} catalog keygen --output SIGNING_KEY\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n       {program} catalog sign --release RELEASE_DIRECTORY --key SIGNING_KEY\n\n`--input -` reads decompressed JSONL from standard input.",
+        "usage: {program} format-version\n       {program} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --contact URL_OR_EMAIL [--shard ORDINAL/TOTAL]\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} source manifest --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION\n       {program} catalog keygen --output SIGNING_KEY\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n       {program} catalog sign --release RELEASE_DIRECTORY --key SIGNING_KEY\n\n`--input -` reads decompressed JSONL from standard input.",
         program = program.to_string_lossy(),
     )
 }

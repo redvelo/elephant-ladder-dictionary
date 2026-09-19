@@ -348,7 +348,7 @@ fn acquisition_build_and_runtime_cover_every_recording_status() {
         api_url: commons.url.clone(),
         download_workers: 2,
         backoff: Duration::from_millis(1),
-        ..AcquireOptions::commons("elephant-ladder-dictionary-test/1".to_owned())
+        ..AcquireOptions::commons("https://example.invalid/test")
     };
     let state_directory = temporary.path().join("acquisition");
     let state =
@@ -452,7 +452,7 @@ fn installed_collections_reject_identity_changes_and_tampered_recordings() {
         &AcquireOptions {
             api_url: commons.url,
             backoff: Duration::from_millis(1),
-            ..AcquireOptions::commons("test/1".to_owned())
+            ..AcquireOptions::commons("https://example.invalid/test")
         },
     )
     .unwrap();
@@ -500,4 +500,83 @@ fn installed_collections_reject_identity_changes_and_tampered_recordings() {
     let installed =
         AudioCollection::open_installed(&directory, &expected, PackLimits::default()).unwrap();
     assert!(installed.validate_all().is_err());
+}
+
+#[test]
+fn persistent_rate_limits_stop_the_run_and_leave_files_resumable() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/w/api.php", listener.local_addr().unwrap());
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&requests);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap() > 2 {
+                line.clear();
+            }
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        }
+    });
+    let temporary = tempfile::tempdir().unwrap();
+    let references = ReferenceSet {
+        schema_version: 1,
+        corpus_pack_id: "wiktionary-en-en".to_owned(),
+        corpus_revision: digest(b"corpus"),
+        corpus_language: "en".to_owned(),
+        files: vec![("En-us-run.ogg".to_owned(), 1)],
+        invalid: Vec::new(),
+    };
+    let state = AcquisitionState::open_or_create(
+        &temporary.path().join("acquisition"),
+        &references,
+        "2026-09-16T00:00:00Z",
+    )
+    .unwrap();
+    let error = acquire(
+        &state,
+        &AcquireOptions {
+            api_url: url,
+            max_consecutive_rate_limits: 3,
+            backoff: Duration::from_millis(1),
+            ..AcquireOptions::commons("https://example.invalid/test")
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("rate limited 4 consecutive times"),
+        "{error}"
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        state
+            .names_in_phase(elephant_ladder_dictionary_pack_builder::Phase::Pending, 10)
+            .unwrap(),
+        ["En-us-run.ogg"]
+    );
+}
+
+#[test]
+fn commons_options_follow_the_wikimedia_robot_policy() {
+    let options = AcquireOptions::commons("https://github.com/redvelo/elephant-ladder-dictionary");
+    assert!(
+        options
+            .user_agent
+            .starts_with("ElephantLadderDictionaryBot/")
+    );
+    assert!(
+        options
+            .user_agent
+            .contains("(https://github.com/redvelo/elephant-ladder-dictionary) ureq/")
+    );
+    assert_eq!(options.download_workers, 2);
+    assert_eq!(options.download_bytes_per_second * 8, 25_000_000);
+    assert_eq!(options.server_error_pause, Duration::from_secs(900));
 }

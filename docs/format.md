@@ -102,6 +102,9 @@ A release publishes `catalog-v1.json` and `catalog-v1.json.sig`.
 directory; `catalog sign` signs it; `catalog keygen` creates an owner-only signing
 key.
 
+Catalog assembly currently covers corpus packs. Audio collections have a catalog
+representation but no assembly path, so they cannot yet be published in a release.
+
 ## Audio Collections
 
 An audio collection holds pronunciation recordings for one corpus language, keyed by
@@ -142,12 +145,22 @@ verifies each blob's SHA-256; `validate_all` also checks chunk assignment, Ogg f
 
 1. `audio references --pack CORPUS` writes every normalized file name referenced by
    `sounds[].audio`, with counts, and lists authored values that are not file names.
-2. `audio acquire --references REFS --state DIRECTORY --user-agent AGENT` resolves
-   files through the Commons API in batches of 50 with `maxlag`, follows normalized
-   titles and redirects, downloads originals with bounded concurrency and
-   `Retry-After` handling, verifies SHA-1, and persists progress in
-   `acquisition.sqlite`. Rerunning resumes and retries failed files up to three
-   attempts.
+2. `audio acquire --references REFS --state DIRECTORY --contact URL_OR_EMAIL` resolves
+   files through the Commons API with one serial request per batch of 50 and `maxlag`,
+   follows normalized titles and redirects, and downloads originals within the
+   [Wikimedia robot policy](https://wikitech.wikimedia.org/wiki/Robot_policy): at most
+   two concurrent downloads, 25 Mbps in total, a User-Agent of the form
+   `ElephantLadderDictionaryBot/<version> (<contact>) ureq/3`, a shared pause for
+   every `Retry-After` or `maxlag`, a 15 minute pause after server errors, and a
+   clean stop after ten consecutive rate limits. It verifies SHA-1 and persists
+   progress in `acquisition.sqlite`; rerunning resumes and retries failed files up to
+   three attempts.
+   `--shard ORDINAL/TOTAL` runs one slice of the work, chosen by a stable hash of the file
+   name, so several machines can acquire disjoint slices without coordinating. Originals
+   are stored under their Commons SHA-1 and a file already on disk whose digest matches is
+   adopted without a request, so separately acquired trees merge by copying. Running the
+   acquisitions is an operational concern and lives outside this repository.
+
 3. `audio build --state DIRECTORY --edition EDITION --builder-revision REVISION
    --output COLLECTION` classifies licenses (CC0, public domain, CC BY, CC BY-SA, GFDL;
    anything with Commons restrictions is unqualified), converts authors to text, and
