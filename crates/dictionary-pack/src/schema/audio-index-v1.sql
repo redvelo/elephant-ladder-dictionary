@@ -15,11 +15,13 @@ CREATE TABLE collection_metadata (
     acquired_at TEXT NOT NULL CHECK (length(acquired_at) > 0),
     encoder_profile TEXT NOT NULL,
     builder_revision TEXT NOT NULL CHECK (length(builder_revision) > 0),
-    chunk_count INTEGER NOT NULL CHECK (chunk_count > 0),
+    delivery TEXT NOT NULL CHECK (delivery IN ('bundled', 'remote')),
+    chunk_count INTEGER NOT NULL CHECK (chunk_count >= 0),
     recording_count INTEGER NOT NULL CHECK (recording_count >= 0),
     available_count INTEGER NOT NULL CHECK (available_count BETWEEN 0 AND recording_count),
     recording_input_digest BLOB NOT NULL CHECK (length(recording_input_digest) = 32),
-    minimum_app_version TEXT NOT NULL CHECK (length(minimum_app_version) > 0)
+    minimum_app_version TEXT NOT NULL CHECK (length(minimum_app_version) > 0),
+    CHECK ((delivery = 'bundled') = (chunk_count > 0))
 ) STRICT;
 
 CREATE TABLE chunks (
@@ -39,6 +41,13 @@ CREATE TABLE licenses (
     UNIQUE (short_name, identifier, url)
 ) STRICT;
 
+CREATE TABLE authors (
+    author_ordinal INTEGER PRIMARY KEY CHECK (author_ordinal >= 0),
+    author_text TEXT,
+    author_urls_json TEXT CHECK (author_urls_json IS NULL OR json_valid(author_urls_json)),
+    UNIQUE (author_text, author_urls_json)
+) STRICT;
+
 CREATE TABLE recordings (
     file_name TEXT PRIMARY KEY CHECK (length(file_name) > 0),
     status INTEGER NOT NULL CHECK (status BETWEEN 1 AND 4),
@@ -51,19 +60,18 @@ CREATE TABLE recordings (
     source_size_bytes INTEGER CHECK (source_size_bytes IS NULL OR source_size_bytes >= 0),
     description_url TEXT,
     license_ordinal INTEGER REFERENCES licenses (license_ordinal),
-    author_text TEXT,
-    author_urls_json TEXT CHECK (author_urls_json IS NULL OR json_valid(author_urls_json)),
+    author_ordinal INTEGER REFERENCES authors (author_ordinal),
     attribution_required INTEGER CHECK (attribution_required IS NULL OR attribution_required IN (0, 1)),
     opus_sha256 BLOB CHECK (opus_sha256 IS NULL OR length(opus_sha256) = 32),
     opus_size_bytes INTEGER CHECK (opus_size_bytes IS NULL OR opus_size_bytes > 0),
     duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms > 0),
     chunk_ordinal INTEGER REFERENCES chunks (chunk_ordinal),
     CHECK ((status = 1) = (reason IS NULL)),
-    CHECK ((status = 1) = (opus_sha256 IS NOT NULL)),
+    CHECK (opus_sha256 IS NULL OR status = 1),
     CHECK ((opus_sha256 IS NULL) = (opus_size_bytes IS NULL)),
     CHECK ((opus_sha256 IS NULL) = (duration_ms IS NULL)),
     CHECK ((opus_sha256 IS NULL) = (chunk_ordinal IS NULL)),
-    CHECK (status <> 1 OR (source_sha1 IS NOT NULL AND license_ordinal IS NOT NULL AND description_url IS NOT NULL))
+    CHECK (status <> 1 OR (source_sha1 IS NOT NULL AND license_ordinal IS NOT NULL))
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX recordings_blob_route ON recordings (chunk_ordinal, opus_sha256);

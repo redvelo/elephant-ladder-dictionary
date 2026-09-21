@@ -12,10 +12,10 @@ mod service;
 mod unicode;
 
 pub use audio::{
-    AUDIO_MANIFEST_FILE, AudioCollection, AudioManifest, AudioMetadata, AudioValidationReport,
-    Recording, RecordingAudio, RecordingFacts, RecordingLicense, RecordingStatus,
-    audio_chunk_file_name, audio_chunk_for, audio_index_file_name, frame_recording_facts,
-    opus_duration_ms, recording_input_digest,
+    AUDIO_MANIFEST_FILE, AudioCollection, AudioDelivery, AudioManifest, AudioMetadata,
+    AudioValidationReport, Recording, RecordingAudio, RecordingFacts, RecordingLicense,
+    RecordingStatus, audio_chunk_file_name, audio_chunk_for, audio_index_file_name,
+    frame_recording_facts, opus_duration_ms, recording_input_digest,
 };
 pub use catalog::{
     AudioPack, CATALOG_FILE, CATALOG_SIGNATURE_FILE, Catalog, CatalogAsset, CatalogError,
@@ -43,7 +43,8 @@ pub use pack::{
 pub use semantic::{
     AudioReference, Bounded, Classifier, Descendant, EmphasisRange, Entry, EntryReference, Example,
     Form, Hyphenation, LemmaReference, MatchClass, ProjectionOptions, Pronunciation, Relation,
-    RelationGroup, RelationKind, Ruby, Section, SectionPage, Sense, Translation, commons_file_name,
+    RelationGroup, RelationKind, Ruby, Section, SectionPage, Sense, Translation,
+    commons_description_url, commons_file_name, commons_title,
 };
 pub use service::{
     BilingualLookupOutcome, BilingualView, DictionaryService, DictionarySnapshot, DictionaryView,

@@ -61,6 +61,35 @@ pub fn audio_chunk_for(file_name: &str, chunk_count: u64) -> u64 {
     u64::from_be_bytes(digest[..8].try_into().expect("digest prefix is 8 bytes")) % chunk_count
 }
 
+/// How an admitted collection supplies the audio of its available recordings.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioDelivery {
+    /// Encoded audio ships in the collection's chunk assets.
+    Bundled,
+    /// The collection carries facts only; audio is fetched from the source on demand
+    /// and authenticated against `source_sha1`.
+    Remote,
+}
+
+impl AudioDelivery {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bundled => "bundled",
+            Self::Remote => "remote",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, PackError> {
+        match value {
+            "bundled" => Ok(Self::Bundled),
+            "remote" => Ok(Self::Remote),
+            other => Err(PackError::Corrupt(format!("unknown delivery `{other}`"))),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum RecordingStatus {
@@ -209,6 +238,7 @@ pub struct AudioMetadata {
     pub acquired_at: String,
     pub encoder_profile: String,
     pub builder_revision: String,
+    pub delivery: AudioDelivery,
     pub chunk_count: u64,
     pub recording_count: u64,
     pub available_count: u64,
@@ -395,10 +425,41 @@ impl AudioCollection {
     /// Returns storage or consistency errors.
     pub fn recording(&self, file_name: &str) -> Result<Option<Recording>, PackError> {
         let index = lock(&self.index)?;
-        let mut statement = index.prepare_cached(RECORDING_SELECT)?;
+        let mut statement =
+            index.prepare_cached(&format!("{RECORDING_COLUMNS} WHERE file_name = ?1"))?;
         let row = statement.query_row([file_name], raw_recording).optional()?;
         drop(statement);
         row.map(|raw| recording_from_raw(&index, raw)).transpose()
+    }
+
+    /// How many referenced recordings the collection holds in each status.
+    ///
+    /// # Errors
+    ///
+    /// Returns storage errors.
+    pub fn recording_counts(&self) -> Result<crate::RecordingCounts, PackError> {
+        let index = lock(&self.index)?;
+        let mut statement =
+            index.prepare("SELECT status, count(*) FROM recordings GROUP BY status")?;
+        let mut counts = crate::RecordingCounts {
+            available: 0,
+            unqualified: 0,
+            missing: 0,
+            failed: 0,
+        };
+        for row in
+            statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        {
+            let (status, count) = row?;
+            let count = nonnegative("recording count", count)?;
+            match RecordingStatus::from_code(status)? {
+                RecordingStatus::Available => counts.available = count,
+                RecordingStatus::Unqualified => counts.unqualified = count,
+                RecordingStatus::Missing => counts.missing = count,
+                RecordingStatus::Failed => counts.failed = count,
+            }
+        }
+        Ok(counts)
     }
 
     /// Reads the encoded audio of an available recording, verified against its digest.
@@ -416,6 +477,12 @@ impl AudioCollection {
             return Ok(None);
         };
         self.read_blob(&audio).map(Some)
+    }
+
+    /// Whether a recording of this status carries audio bytes in this collection.
+    const fn bundles(&self, status: RecordingStatus) -> bool {
+        matches!(self.metadata.delivery, AudioDelivery::Bundled)
+            && matches!(status, RecordingStatus::Available)
     }
 
     fn read_blob(&self, audio: &RecordingAudio) -> Result<Vec<u8>, PackError> {
@@ -454,7 +521,7 @@ impl AudioCollection {
     /// Returns an error when any recording, blob, stream, or total disagrees.
     pub fn validate_all(&self) -> Result<AudioValidationReport, PackError> {
         let index = lock(&self.index)?;
-        let mut statement = index.prepare(&format!("{RECORDING_SELECT_ALL} ORDER BY file_name"))?;
+        let mut statement = index.prepare(&format!("{RECORDING_COLUMNS} ORDER BY file_name"))?;
         let raws = statement
             .query_map([], raw_recording)?
             .collect::<Result<Vec<_>, _>>()?;
@@ -465,8 +532,17 @@ impl AudioCollection {
         for raw in raws {
             let recording = recording_from_raw(&index, raw)?;
             frame_recording_facts(&mut digest, &recording.facts);
-            if let Some(audio) = recording.audio {
+            if recording.facts.status == RecordingStatus::Available {
                 available += 1;
+            }
+            if recording.audio.is_some() != self.bundles(recording.facts.status) {
+                return Err(PackError::Corrupt(format!(
+                    "recording `{}` disagrees with {} delivery",
+                    recording.facts.file_name,
+                    self.metadata.delivery.as_str()
+                )));
+            }
+            if let Some(audio) = recording.audio {
                 if audio.chunk_ordinal
                     != audio_chunk_for(&recording.facts.file_name, self.metadata.chunk_count)
                 {
@@ -598,14 +674,11 @@ pub fn opus_duration_ms(bytes: &[u8]) -> Result<u64, PackError> {
     Ok(samples.div_ceil(48))
 }
 
-const RECORDING_SELECT_ALL: &str = "SELECT file_name, status, reason, reference_count, source_title, \
+const RECORDING_COLUMNS: &str = "SELECT file_name, status, reason, reference_count, source_title, \
      source_sha1, source_timestamp, source_media_type, source_size_bytes, description_url, \
      license_ordinal, author_text, author_urls_json, attribution_required, opus_sha256, \
-     opus_size_bytes, duration_ms, chunk_ordinal FROM recordings";
-const RECORDING_SELECT: &str = "SELECT file_name, status, reason, reference_count, source_title, \
-     source_sha1, source_timestamp, source_media_type, source_size_bytes, description_url, \
-     license_ordinal, author_text, author_urls_json, attribution_required, opus_sha256, \
-     opus_size_bytes, duration_ms, chunk_ordinal FROM recordings WHERE file_name = ?1";
+     opus_size_bytes, duration_ms, chunk_ordinal \
+     FROM recordings LEFT JOIN authors USING (author_ordinal)";
 
 type RawRecording = (
     String,
@@ -652,6 +725,8 @@ fn raw_recording(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawRecording> {
 }
 
 fn recording_from_raw(index: &Connection, raw: RawRecording) -> Result<Recording, PackError> {
+    use crate::semantic::commons_title;
+
     let license = match raw.10 {
         Some(ordinal) => Some(index.query_row(
             "SELECT short_name, identifier, url FROM licenses WHERE license_ordinal = ?1",
@@ -685,27 +760,39 @@ fn recording_from_raw(index: &Connection, raw: RawRecording) -> Result<Recording
             ));
         }
     };
+    let source_sha1 = raw
+        .5
+        .map(|bytes| {
+            <[u8; 20]>::try_from(bytes.as_slice())
+                .map_err(|_| PackError::Corrupt("source SHA-1 is not 20 bytes".to_owned()))
+        })
+        .transpose()?;
+    // A resolved recording always carries a source digest, and its title and description
+    // page are stored only when they differ from what Commons would derive from the file
+    // name. Unresolved rows have no source facts at all and derive nothing.
+    let source_title = raw
+        .4
+        .or_else(|| source_sha1.is_some().then(|| commons_title(&raw.0)));
+    let description_url = raw.9.or_else(|| {
+        source_title
+            .as_deref()
+            .map(crate::semantic::commons_description_url)
+    });
     Ok(Recording {
         facts: RecordingFacts {
             file_name: raw.0,
             status: RecordingStatus::from_code(raw.1)?,
             reason: raw.2,
             reference_count: positive("reference count", raw.3)?,
-            source_title: raw.4,
-            source_sha1: raw
-                .5
-                .map(|bytes| {
-                    <[u8; 20]>::try_from(bytes.as_slice())
-                        .map_err(|_| PackError::Corrupt("source SHA-1 is not 20 bytes".to_owned()))
-                })
-                .transpose()?,
+            source_title,
+            source_sha1,
             source_timestamp: raw.6,
             source_media_type: raw.7,
             source_size_bytes: raw
                 .8
                 .map(|size| nonnegative("source size", size))
                 .transpose()?,
-            description_url: raw.9,
+            description_url,
             license,
             author_text: raw.11,
             author_urls,
@@ -817,6 +904,13 @@ fn open_chunk(
     })
 }
 
+const fn expected_encoder_profile(delivery: AudioDelivery) -> &'static str {
+    match delivery {
+        AudioDelivery::Bundled => AUDIO_ENCODER_PROFILE,
+        AudioDelivery::Remote => "",
+    }
+}
+
 fn check_audio_identity(
     pack_id: &PackId,
     revision: &PackRevision,
@@ -830,6 +924,7 @@ fn check_audio_identity(
         acquired_at: &metadata.acquired_at,
         encoder_profile: &metadata.encoder_profile,
         builder_revision: &metadata.builder_revision,
+        delivery: metadata.delivery.as_str(),
         chunk_count: metadata.chunk_count,
         recording_input_digest: &metadata.recording_input_digest,
         minimum_app_version: &metadata.minimum_app_version,
@@ -837,7 +932,7 @@ fn check_audio_identity(
     if metadata.pack_id != pack_id.as_str()
         || &metadata.revision != revision.as_bytes()
         || derived != *revision
-        || metadata.encoder_profile != AUDIO_ENCODER_PROFILE
+        || metadata.encoder_profile != expected_encoder_profile(metadata.delivery)
     {
         return Err(PackError::Corrupt(
             "audio manifest and index metadata disagree".to_owned(),
@@ -857,8 +952,9 @@ fn read_metadata(index: &Connection) -> Result<AudioMetadata, PackError> {
     }
     let raw = index.query_row(
         "SELECT pack_id, pack_revision, corpus_language, source_corpus_pack_id, \
-         source_corpus_revision, acquired_at, encoder_profile, builder_revision, chunk_count, \
-         recording_count, available_count, recording_input_digest, minimum_app_version \
+         source_corpus_revision, acquired_at, encoder_profile, builder_revision, delivery, \
+         chunk_count, recording_count, available_count, recording_input_digest, \
+         minimum_app_version \
          FROM collection_metadata WHERE singleton = 1",
         [],
         |row| {
@@ -871,11 +967,12 @@ fn read_metadata(index: &Connection) -> Result<AudioMetadata, PackError> {
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
-                row.get::<_, i64>(8)?,
+                row.get::<_, String>(8)?,
                 row.get::<_, i64>(9)?,
                 row.get::<_, i64>(10)?,
-                row.get::<_, Vec<u8>>(11)?,
-                row.get::<_, String>(12)?,
+                row.get::<_, i64>(11)?,
+                row.get::<_, Vec<u8>>(12)?,
+                row.get::<_, String>(13)?,
             ))
         },
     )?;
@@ -888,11 +985,12 @@ fn read_metadata(index: &Connection) -> Result<AudioMetadata, PackError> {
         acquired_at: raw.5,
         encoder_profile: raw.6,
         builder_revision: raw.7,
-        chunk_count: positive("chunk count", raw.8)?,
-        recording_count: nonnegative("recording count", raw.9)?,
-        available_count: nonnegative("available count", raw.10)?,
-        recording_input_digest: bytes32("recording input digest", &raw.11)?,
-        minimum_app_version: raw.12,
+        delivery: AudioDelivery::parse(&raw.8)?,
+        chunk_count: nonnegative("chunk count", raw.9)?,
+        recording_count: nonnegative("recording count", raw.10)?,
+        available_count: nonnegative("available count", raw.11)?,
+        recording_input_digest: bytes32("recording input digest", &raw.12)?,
+        minimum_app_version: raw.13,
     })
 }
 

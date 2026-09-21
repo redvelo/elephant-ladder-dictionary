@@ -169,3 +169,8 @@ verifies each blob's SHA-256; `validate_all` also checks chunk assignment, Ogg f
 4. `audio validate --collection COLLECTION` performs full admission and validation.
 
 `audio transcode --input SOURCE --output RECORDING` transcodes one file for inspection.
+
+Encoding is behind the default `transcode` feature. A machine that only acquires
+recordings can build with `--no-default-features`, which drops the Opus encoder and the
+source decoders; `audio build` and `audio transcode` then report that the build cannot
+encode audio.

@@ -1,3 +1,7 @@
+//! Audio acquisition and collection building. Collection building needs an encoder, so
+//! the whole file is skipped when the crate is built without the transcode feature.
+#![cfg(feature = "transcode")]
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -8,12 +12,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use elephant_ladder_dictionary_pack::{
-    AUDIO_MANIFEST_FILE, AudioCollection, DictionaryPack, ExpectedPack, PackLimits, PackRevision,
-    RecordingStatus, Sha256Hex, opus_duration_ms,
+    AUDIO_MANIFEST_FILE, AudioCollection, AudioDelivery, CatalogPack, DictionaryPack, ExpectedPack,
+    PackLimits, PackRevision, RecordingStatus, Sha256Hex, opus_duration_ms,
 };
 use elephant_ladder_dictionary_pack_builder::{
-    AcquireOptions, AcquisitionState, AudioBuildOptions, AudioEditionConfig, BuildManifest,
-    BuildOptions, ReferenceSet, acquire, build_audio_collection, build_pack,
+    AcquireOptions, AcquisitionState, AudioBuildOptions, AudioBuildResult, AudioConfig,
+    AudioEditionConfig, BuildManifest, BuildOptions, CatalogConfig, Phase, ReferenceSet, acquire,
+    assemble_catalog, build_audio_collection, build_pack,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -374,6 +379,7 @@ fn acquisition_build_and_runtime_cover_every_recording_status() {
         builder_revision: "builder-a".to_owned(),
         minimum_app_version: "0.1.0".to_owned(),
         workers: 3,
+        delivery: AudioDelivery::Bundled,
     };
     let first = temporary.path().join("collection-a");
     let second = temporary.path().join("collection-b");
@@ -427,6 +433,157 @@ fn acquisition_build_and_runtime_cover_every_recording_status() {
     AudioCollection::open_installed(&rebuilt, &expected(&rebuilt), PackLimits::default()).unwrap();
 }
 
+/// A remote collection built from an acquisition whose originals were never downloaded.
+fn remote_collection(temporary: &Path) -> (AudioBuildResult, PathBuf) {
+    let corpus = build_corpus(&temporary.join("corpus"));
+    let references = corpus.audio_references().unwrap();
+    let reference_set = ReferenceSet {
+        schema_version: 1,
+        corpus_pack_id: corpus.pack_id().as_str().to_owned(),
+        corpus_revision: Sha256Hex::from_bytes(*corpus.pack_revision().as_bytes()),
+        corpus_language: "en".to_owned(),
+        files: references.files.into_iter().collect(),
+        invalid: references.invalid.into_iter().collect(),
+    };
+    let commons = fake_commons();
+    let options = AcquireOptions {
+        api_url: commons.url.clone(),
+        download_workers: 2,
+        backoff: Duration::from_millis(1),
+        ..AcquireOptions::commons("https://example.invalid/test")
+    };
+    let state_directory = temporary.join("acquisition");
+    let state =
+        AcquisitionState::open_or_create(&state_directory, &reference_set, "2026-09-16T00:00:00Z")
+            .unwrap();
+    assert!(acquire(&state, &options).unwrap().completed);
+
+    // A remote collection needs resolved facts only, so downloads that have not happened
+    // yet must not stop the build.
+    for file in state.files().unwrap() {
+        if file.phase == Phase::Downloaded {
+            state
+                .set_phase(&file.file_name, Phase::Resolved, None)
+                .unwrap();
+        }
+    }
+    let audio = AudioEditionConfig {
+        pack_id: "wiktionary-en-audio".to_owned(),
+        chunk_count: 4,
+    };
+    let directory = temporary.join("remote");
+    let result = build_audio_collection(
+        &state,
+        &audio,
+        &AudioBuildOptions {
+            builder_revision: "builder-a".to_owned(),
+            minimum_app_version: "0.1.0".to_owned(),
+            workers: 2,
+            delivery: AudioDelivery::Remote,
+        },
+        &directory,
+    )
+    .unwrap();
+    (result, directory)
+}
+
+#[test]
+fn index_only_collections_carry_facts_without_audio_and_build_before_downloads() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (result, directory) = remote_collection(temporary.path());
+    assert_eq!(
+        (
+            result.recordings,
+            result.available,
+            result.unqualified,
+            result.missing
+        ),
+        (7, 4, 1, 1)
+    );
+    assert_eq!(result.blob_bytes, 0);
+
+    let names: Vec<_> = fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names.iter().all(|name| !name.contains("-chunk-")));
+
+    let collection =
+        AudioCollection::verify(&directory, &expected(&directory), PackLimits::default()).unwrap();
+    assert_eq!(collection.metadata().delivery, AudioDelivery::Remote);
+    assert_eq!(collection.metadata().chunk_count, 0);
+    let report = collection.validate_all().unwrap();
+    assert_eq!(
+        (report.available_count, report.blob_count, report.blob_bytes),
+        (4, 0, 0)
+    );
+
+    let recording = collection
+        .recording("LL-Q150 (fra)-Antochkat-cubi.wav")
+        .unwrap()
+        .unwrap();
+    assert_eq!(recording.facts.status, RecordingStatus::Available);
+    assert!(recording.audio.is_none());
+    assert!(recording.facts.source_sha1.is_some());
+    assert_eq!(recording.facts.license.unwrap().short_name, "CC0");
+    assert!(
+        collection
+            .read("LL-Q150 (fra)-Antochkat-cubi.wav")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn remote_collections_are_catalogued_with_their_delivery() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, directory) = remote_collection(temporary.path());
+    let catalog = assemble_catalog(
+        &CatalogConfig {
+            catalog_revision: "2026-09-21.1".to_owned(),
+            generated_at: "2026-09-21T00:00:00Z".to_owned(),
+            release_base_url: "https://github.com/example/packs/releases/download/r".to_owned(),
+            corpora: Vec::new(),
+            audio: vec![AudioConfig {
+                directory: "remote".into(),
+                release_base_url: None,
+            }],
+        },
+        temporary.path(),
+        &temporary.path().join("release"),
+    )
+    .unwrap();
+    let [CatalogPack::Audio(audio)] = catalog.packs.as_slice() else {
+        panic!("expected one audio collection");
+    };
+    assert_eq!(audio.delivery, AudioDelivery::Remote);
+    assert_eq!(audio.corpus_language, "en");
+    assert_eq!(
+        (
+            audio.recordings.available,
+            audio.recordings.unqualified,
+            audio.recordings.missing,
+            audio.recordings.failed
+        ),
+        (4, 1, 1, 1)
+    );
+    let names: Vec<_> = audio
+        .release
+        .assets
+        .iter()
+        .map(|asset| asset.file_name.as_str())
+        .collect();
+    assert_eq!(names.len(), 2);
+    assert!(names.contains(&AUDIO_MANIFEST_FILE));
+    AudioCollection::verify(
+        &directory,
+        &catalog.packs[0].expected_pack(),
+        PackLimits::default(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn installed_collections_reject_identity_changes_and_tampered_recordings() {
     let temporary = tempfile::tempdir().unwrap();
@@ -467,6 +624,7 @@ fn installed_collections_reject_identity_changes_and_tampered_recordings() {
             builder_revision: "builder".to_owned(),
             minimum_app_version: "0.1.0".to_owned(),
             workers: 1,
+            delivery: AudioDelivery::Bundled,
         },
         &directory,
     )

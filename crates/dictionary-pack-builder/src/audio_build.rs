@@ -6,21 +6,27 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, params};
 use serde::Serialize;
+#[cfg(feature = "transcode")]
 use sha1::Sha1;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+#[cfg(feature = "transcode")]
+use sha2::Sha256;
 
-use crate::audio_state::{
-    AcquisitionState, Phase, author_from_html, original_path, qualify_license,
-};
+#[cfg(feature = "transcode")]
+use crate::audio_state::original_path;
+use crate::audio_state::{AcquisitionState, Phase, author_from_html, qualify_license};
 use crate::builder::{
     StagingDirectory, asset_for, close_connection, io_error, sql_i64, sync_directory,
 };
-use crate::{AudioEditionConfig, BuildError, transcode_to_opus};
+#[cfg(feature = "transcode")]
+use crate::transcode_to_opus;
+use crate::{AudioEditionConfig, BuildError};
 use elephant_ladder_dictionary_pack::{
     AUDIO_CHUNK_SCHEMA, AUDIO_ENCODER_PROFILE, AUDIO_INDEX_SCHEMA, AUDIO_MANIFEST_FILE,
-    AudioManifest, AudioRevisionInputs, FORMAT_VERSION, PackAsset, PackId, PackRevision,
-    RecordingFacts, RecordingLicense, RecordingStatus, Sha256Hex, audio_chunk_file_name,
-    audio_chunk_for, audio_index_file_name, frame_recording_facts, recording_input_digest,
+    AudioDelivery, AudioManifest, AudioRevisionInputs, FORMAT_VERSION, PackAsset, PackId,
+    PackRevision, RecordingFacts, RecordingLicense, RecordingStatus, Sha256Hex,
+    audio_chunk_file_name, audio_chunk_for, audio_index_file_name, commons_description_url,
+    commons_title, frame_recording_facts, recording_input_digest,
 };
 
 /// Longest accepted source recording.
@@ -33,6 +39,7 @@ pub struct AudioBuildOptions {
     pub builder_revision: String,
     pub minimum_app_version: String,
     pub workers: usize,
+    pub delivery: AudioDelivery,
 }
 
 /// Summary of a built audio collection.
@@ -66,21 +73,36 @@ pub fn build_audio_collection(
     output: &Path,
 ) -> Result<AudioBuildResult, BuildError> {
     let pack_id = PackId::from_str(&audio.pack_id)?;
-    if audio.chunk_count == 0 {
+    let remote = options.delivery == AudioDelivery::Remote;
+    let chunk_count = if remote { 0 } else { audio.chunk_count };
+    if !remote && chunk_count == 0 {
         return Err(BuildError::InvalidManifest(
             "audio chunk count must be positive".to_owned(),
         ));
     }
-    let (corpus_pack_id, corpus_revision, corpus_language, _, completed_at) = state.metadata()?;
-    let acquired_at = completed_at
-        .ok_or_else(|| BuildError::InvalidManifest("acquisition is not complete".to_owned()))?;
+    let (corpus_pack_id, corpus_revision, corpus_language, started_at, completed_at) =
+        state.metadata()?;
+    // A remote collection needs only resolved facts, so it is buildable as soon as every
+    // file has been looked up, long before the originals finish downloading. Its acquisition
+    // moment is when that lookup began; the facts digest is what separates two builds.
+    let acquired_at = if remote {
+        started_at
+    } else {
+        completed_at
+            .ok_or_else(|| BuildError::InvalidManifest("acquisition is not complete".to_owned()))?
+    };
     let corpus_pack_id = PackId::from_str(&corpus_pack_id)?;
     let corpus_revision: Sha256Hex = corpus_revision
         .parse()
         .map_err(|message: &str| BuildError::InvalidManifest(message.to_owned()))?;
 
     let files = state.files()?;
-    let built = transcode_all(state.directory(), &files, options.workers.max(1))?;
+    let built = build_all(
+        state.directory(),
+        &files,
+        options.workers.max(1),
+        options.delivery,
+    )?;
 
     let mut digest = recording_input_digest();
     for recording in &built {
@@ -93,15 +115,20 @@ pub fn build_audio_collection(
         source_corpus_pack_id: &corpus_pack_id,
         source_corpus_revision: &PackRevision::from_bytes(*corpus_revision.as_bytes()),
         acquired_at: &acquired_at,
-        encoder_profile: AUDIO_ENCODER_PROFILE,
+        encoder_profile: encoder_profile(options.delivery),
         builder_revision: &options.builder_revision,
-        chunk_count: audio.chunk_count,
+        delivery: options.delivery.as_str(),
+        chunk_count,
         recording_input_digest: &recording_input_digest,
         minimum_app_version: &options.minimum_app_version,
     });
 
     let mut staging = StagingDirectory::create(output)?;
-    let (mut assets, routes) = write_chunks(staging.path(), &pack_id, &built, audio.chunk_count)?;
+    let (mut assets, routes) = if remote {
+        (Vec::new(), Vec::new())
+    } else {
+        write_chunks(staging.path(), &pack_id, &built, chunk_count)?
+    };
 
     let index_name = audio_index_file_name(&pack_id, &revision);
     let index_path = staging.path().join(&index_name);
@@ -115,7 +142,8 @@ pub fn build_audio_collection(
             corpus_revision: &corpus_revision,
             acquired_at: &acquired_at,
             builder_revision: &options.builder_revision,
-            chunk_count: audio.chunk_count,
+            delivery: options.delivery,
+            chunk_count,
             recording_input_digest: &recording_input_digest,
             minimum_app_version: &options.minimum_app_version,
         },
@@ -139,13 +167,22 @@ pub fn build_audio_collection(
     sync_directory(staging.path())?;
     staging.publish(output)?;
 
+    Ok(summarize(&pack_id, &revision, &built, &routes))
+}
+
+fn summarize(
+    pack_id: &PackId,
+    revision: &PackRevision,
+    built: &[Built],
+    routes: &[ChunkRoute],
+) -> AudioBuildResult {
     let count = |status| {
         built
             .iter()
             .filter(|recording| recording.facts.status == status)
             .count() as u64
     };
-    Ok(AudioBuildResult {
+    AudioBuildResult {
         pack_id: pack_id.as_str().to_owned(),
         pack_revision: Sha256Hex::from_bytes(*revision.as_bytes()),
         recordings: built.len() as u64,
@@ -154,16 +191,21 @@ pub fn build_audio_collection(
         missing: count(RecordingStatus::Missing),
         failed: count(RecordingStatus::Failed),
         blob_bytes: routes.iter().map(|route| route.blob_bytes).sum(),
-    })
+    }
 }
 
-fn transcode_all(
+fn build_all(
     acquisition: &Path,
     files: &[crate::audio_state::FileState],
     workers: usize,
+    delivery: AudioDelivery,
 ) -> Result<Vec<Built>, BuildError> {
+    let unsettled = match delivery {
+        AudioDelivery::Bundled => &[Phase::Pending, Phase::Resolved][..],
+        AudioDelivery::Remote => &[Phase::Pending][..],
+    };
     for file in files {
-        if matches!(file.phase, Phase::Pending | Phase::Resolved) {
+        if unsettled.contains(&file.phase) {
             return Err(BuildError::InvalidManifest(format!(
                 "`{}` is still {}",
                 file.file_name,
@@ -186,7 +228,7 @@ fn transcode_all(
                     let Some(file) = files.get(index) else {
                         return;
                     };
-                    let built = build_one(acquisition, file);
+                    let built = build_one(acquisition, file, delivery);
                     results.lock().expect("result lock").push((index, built));
                 }
             });
@@ -200,6 +242,7 @@ fn transcode_all(
 fn build_one(
     acquisition: &Path,
     file: &crate::audio_state::FileState,
+    delivery: AudioDelivery,
 ) -> Result<Built, BuildError> {
     let facts = file.facts.as_ref();
     let mut recording = base_facts(file);
@@ -253,6 +296,24 @@ fn build_one(
         }
     };
     recording.license = Some(license);
+    if delivery == AudioDelivery::Remote {
+        recording.status = RecordingStatus::Available;
+        recording.reason = None;
+        return Ok(Built {
+            facts: recording,
+            audio: None,
+        });
+    }
+    encode_one(acquisition, recording, facts)
+}
+
+/// Encodes one downloaded original into the pack's Opus profile.
+#[cfg(feature = "transcode")]
+fn encode_one(
+    acquisition: &Path,
+    mut recording: RecordingFacts,
+    facts: &crate::audio_state::CommonsFacts,
+) -> Result<Built, BuildError> {
     let path = original_path(acquisition, &facts.sha1);
     let source = fs::read(&path).map_err(|source| io_error("read original", &path, source))?;
     if hex::encode(Sha1::digest(&source)) != facts.sha1 {
@@ -285,6 +346,19 @@ fn build_one(
             })
         }
     }
+}
+
+/// Without the encoder this build can still produce index-only collections, but it cannot
+/// turn an original into pack audio.
+#[cfg(not(feature = "transcode"))]
+fn encode_one(
+    _acquisition: &Path,
+    _recording: RecordingFacts,
+    _facts: &crate::audio_state::CommonsFacts,
+) -> Result<Built, BuildError> {
+    Err(BuildError::InvalidManifest(
+        "this builder was compiled without the audio encoder".to_owned(),
+    ))
 }
 
 fn base_facts(file: &crate::audio_state::FileState) -> RecordingFacts {
@@ -410,18 +484,37 @@ fn write_chunk(
 
 type LicenseKey = (String, Option<String>, Option<String>);
 
+type AuthorKey = (Option<String>, Option<String>);
+
+/// The interned author of one recording, or `None` when it names nobody.
+fn author_key(facts: &RecordingFacts) -> Result<Option<AuthorKey>, BuildError> {
+    if facts.author_text.is_none() && facts.author_urls.is_empty() {
+        return Ok(None);
+    }
+    let urls = if facts.author_urls.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(&facts.author_urls)
+                .map_err(|error| BuildError::InvalidManifest(error.to_string()))?,
+        )
+    };
+    Ok(Some((facts.author_text.clone(), urls)))
+}
+
 fn insert_recordings(
     connection: &Connection,
     built: &[Built],
     licenses: &[LicenseKey],
+    authors: &[AuthorKey],
     chunk_count: u64,
 ) -> Result<(), BuildError> {
     let mut insert = connection.prepare(
         "INSERT INTO recordings (file_name, status, reason, reference_count, source_title, \
          source_sha1, source_timestamp, source_media_type, source_size_bytes, description_url, \
-         license_ordinal, author_text, author_urls_json, attribution_required, opus_sha256, \
+         license_ordinal, author_ordinal, attribution_required, opus_sha256, \
          opus_size_bytes, duration_ms, chunk_ordinal) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
     )?;
     for recording in built {
         let facts = &recording.facts;
@@ -443,21 +536,35 @@ fn insert_recordings(
                     })
             })
             .transpose()?;
-        let author_urls = if facts.author_urls.is_empty() {
-            None
-        } else {
-            Some(
-                serde_json::to_string(&facts.author_urls)
-                    .map_err(|error| BuildError::InvalidManifest(error.to_string()))?,
-            )
-        };
+        let author_ordinal = author_key(facts)?
+            .map(|key| {
+                authors
+                    .binary_search(&key)
+                    .ok()
+                    .and_then(|ordinal| i64::try_from(ordinal).ok())
+                    .ok_or_else(|| BuildError::InvalidManifest("author was not indexed".to_owned()))
+            })
+            .transpose()?;
+        // Commons derives a file's title and description page from its name, so only the
+        // few that disagree are worth storing.
+        let derived_title = commons_title(&facts.file_name);
+        let source_title = facts
+            .source_title
+            .as_ref()
+            .filter(|title| **title != derived_title);
+        let description_url = facts.description_url.as_ref().filter(|url| {
+            facts
+                .source_title
+                .as_deref()
+                .is_none_or(|title| **url != commons_description_url(title))
+        });
         let audio = recording.audio.as_ref();
         insert.execute(params![
             facts.file_name,
             facts.status as u8,
             facts.reason,
             sql_i64("references", facts.reference_count)?,
-            facts.source_title,
+            source_title,
             facts.source_sha1.as_ref().map(<[u8; 20]>::as_slice),
             facts.source_timestamp,
             facts.source_media_type,
@@ -465,10 +572,9 @@ fn insert_recordings(
                 .source_size_bytes
                 .map(|size| sql_i64("source size", size))
                 .transpose()?,
-            facts.description_url,
+            description_url,
             license_ordinal,
-            facts.author_text,
-            author_urls,
+            author_ordinal,
             facts.attribution_required,
             audio.map(|(_, sha256, _)| sha256.as_slice()),
             audio
@@ -485,6 +591,13 @@ fn insert_recordings(
     Ok(())
 }
 
+const fn encoder_profile(delivery: AudioDelivery) -> &'static str {
+    match delivery {
+        AudioDelivery::Bundled => AUDIO_ENCODER_PROFILE,
+        AudioDelivery::Remote => "",
+    }
+}
+
 struct IndexInputs<'a> {
     pack_id: &'a PackId,
     revision: &'a PackRevision,
@@ -493,6 +606,7 @@ struct IndexInputs<'a> {
     corpus_revision: &'a Sha256Hex,
     acquired_at: &'a str,
     builder_revision: &'a str,
+    delivery: AudioDelivery,
     chunk_count: u64,
     recording_input_digest: &'a [u8; 32],
     minimum_app_version: &'a str,
@@ -509,14 +623,14 @@ fn write_index(
     connection.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; BEGIN;")?;
     let available = built
         .iter()
-        .filter(|recording| recording.audio.is_some())
+        .filter(|recording| recording.facts.status == RecordingStatus::Available)
         .count() as u64;
     connection.execute(
         "INSERT INTO collection_metadata (singleton, format_version, pack_id, pack_revision, \
          corpus_language, source_corpus_pack_id, source_corpus_revision, acquired_at, \
-         encoder_profile, builder_revision, chunk_count, recording_count, available_count, \
-         recording_input_digest, minimum_app_version) \
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+         encoder_profile, builder_revision, delivery, chunk_count, recording_count, \
+         available_count, recording_input_digest, minimum_app_version) \
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             FORMAT_VERSION,
             inputs.pack_id.as_str(),
@@ -525,8 +639,9 @@ fn write_index(
             inputs.corpus_pack_id.as_str(),
             inputs.corpus_revision.as_bytes().as_slice(),
             inputs.acquired_at,
-            AUDIO_ENCODER_PROFILE,
+            encoder_profile(inputs.delivery),
             inputs.builder_revision,
+            inputs.delivery.as_str(),
             sql_i64("chunk count", inputs.chunk_count)?,
             sql_i64("recordings", built.len() as u64)?,
             sql_i64("available", available)?,
@@ -567,7 +682,23 @@ fn write_index(
             params![sql_i64("license", ordinal as u64)?, short_name, identifier, url],
         )?;
     }
-    insert_recordings(&connection, built, &licenses, inputs.chunk_count)?;
+    let authors = built
+        .iter()
+        .map(|recording| author_key(&recording.facts))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    for (ordinal, (author_text, author_urls)) in authors.iter().enumerate() {
+        connection.execute(
+            "INSERT INTO authors (author_ordinal, author_text, author_urls_json) \
+             VALUES (?1, ?2, ?3)",
+            params![sql_i64("author", ordinal as u64)?, author_text, author_urls],
+        )?;
+    }
+    insert_recordings(&connection, built, &licenses, &authors, inputs.chunk_count)?;
     connection.execute_batch("COMMIT; VACUUM;")?;
     close_connection(connection)
 }

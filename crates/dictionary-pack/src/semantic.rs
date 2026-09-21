@@ -1511,6 +1511,37 @@ pub fn commons_file_name(authored: &str) -> Option<String> {
     Some(first.to_uppercase().chain(characters).collect())
 }
 
+/// The Commons page title of a file, as `MediaWiki` writes it.
+#[must_use]
+pub fn commons_title(file_name: &str) -> String {
+    format!("File:{file_name}")
+}
+
+/// The Commons description page of a title, as `MediaWiki` builds it.
+///
+/// Titles reach a URL through `wfUrlencode`, which turns spaces into underscores and
+/// percent encodes everything outside the unreserved set and `;:@$!*(),/~`.
+#[must_use]
+pub fn commons_description_url(title: &str) -> String {
+    use std::fmt::Write as _;
+
+    const EXTRA_SAFE: &[u8] = b";:@$!*(),/~";
+    let mut url = String::from("https://commons.wikimedia.org/wiki/");
+    for byte in title.bytes() {
+        match byte {
+            b' ' => url.push('_'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                url.push(byte as char);
+            }
+            byte if EXTRA_SAFE.contains(&byte) => url.push(byte as char),
+            byte => {
+                let _ = write!(url, "%{byte:02X}");
+            }
+        }
+    }
+    url
+}
+
 /// Decodes `%XX` sequences the way `MediaWiki` decodes them in titles.
 ///
 /// Authored `audio` values are sometimes percent encoded, and the encoded form names no

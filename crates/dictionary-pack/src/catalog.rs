@@ -5,6 +5,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::AudioDelivery;
 use crate::{
     AUDIO_MANIFEST_FILE, ExpectedPack, PACK_MANIFEST_FILE, PackId, PackRevision, Sha256Hex,
 };
@@ -118,6 +119,8 @@ pub struct AudioPack {
     pub release: PackRelease,
     pub corpus_language: String,
     pub recordings: RecordingCounts,
+    /// Whether the collection ships its audio or fetches it from the source on demand.
+    pub delivery: AudioDelivery,
 }
 
 /// Referenced recordings of an audio collection by status.

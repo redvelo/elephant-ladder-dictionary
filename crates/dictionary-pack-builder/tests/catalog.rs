@@ -64,7 +64,9 @@ fn config() -> CatalogConfig {
             directory: "pack".into(),
             monolingual: true,
             bilingual_targets: vec!["fr".to_owned(), "ja".to_owned()],
+            release_base_url: None,
         }],
+        audio: Vec::new(),
     }
 }
 
@@ -102,8 +104,11 @@ fn assembled_catalog_verifies_and_anchors_pack_admission() {
         .iter()
         .find(|asset| asset.file_name == PACK_MANIFEST_FILE)
         .unwrap();
-    let release_name =
-        release_manifest_name(&corpus.release.pack_id, &corpus.release.pack_revision);
+    let release_name = release_manifest_name(
+        &corpus.release.pack_id,
+        &corpus.release.pack_revision,
+        PACK_MANIFEST_FILE,
+    );
     assert_eq!(
         manifest_asset.url,
         format!("https://github.com/example/packs/releases/download/2026-09-16.1/{release_name}")
@@ -122,6 +127,33 @@ fn assembled_catalog_verifies_and_anchors_pack_admission() {
         PackLimits::default(),
     )
     .unwrap();
+}
+
+#[test]
+fn packs_published_by_an_earlier_release_are_referenced_not_copied() {
+    let temporary = tempfile::tempdir().unwrap();
+    build_pack_directory(temporary.path());
+    let earlier = "https://github.com/example/packs/releases/download/2026-09-01.1";
+    let mut config = config();
+    config.corpora[0].release_base_url = Some(earlier.to_owned());
+    let release = temporary.path().join("release");
+    let catalog = assemble_catalog(&config, temporary.path(), &release).unwrap();
+
+    let [CatalogPack::Corpus(corpus)] = catalog.packs.as_slice() else {
+        panic!("expected one corpus");
+    };
+    assert!(
+        corpus
+            .release
+            .assets
+            .iter()
+            .all(|asset| asset.url.starts_with(&format!("{earlier}/")))
+    );
+    let published: Vec<_> = fs::read_dir(&release)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(published, [CATALOG_FILE]);
 }
 
 #[test]

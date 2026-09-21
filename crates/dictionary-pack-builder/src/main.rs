@@ -9,16 +9,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use elephant_ladder_dictionary_pack::{
-    AUDIO_MANIFEST_FILE, AudioCollection, AudioManifest, DATA_APPLICATION_ID, DictionaryPack,
-    ExpectedPack, FORMAT_VERSION, INDEX_APPLICATION_ID, PackError, PackLimits, PackRevision,
-    Sha256Hex, UNICODE_PROFILE,
+    AUDIO_MANIFEST_FILE, AudioCollection, AudioDelivery, AudioManifest, DATA_APPLICATION_ID,
+    DictionaryPack, ExpectedPack, FORMAT_VERSION, INDEX_APPLICATION_ID, PackError, PackLimits,
+    PackRevision, Sha256Hex, UNICODE_PROFILE,
 };
 use elephant_ladder_dictionary_pack_builder::{
-    AcquireOptions, AcquisitionState, AudioBuildOptions, BuildManifest, BuildOptions,
-    CatalogConfig, EditionConfig, MAX_RECORDING_SECONDS, ReferenceSet, SourceSnapshot, acquire,
-    assemble_catalog, build_audio_collection, build_manifest, build_pack, generate_signing_key,
-    read_signing_key, sign_catalog, transcode_to_opus, utc_now, validate_snapshot,
+    AcquireOptions, AcquisitionState, BuildManifest, BuildOptions, CatalogConfig, EditionConfig,
+    ReferenceSet, SourceSnapshot, acquire, assemble_catalog, build_manifest, build_pack,
+    generate_signing_key, read_signing_key, sign_catalog, utc_now, validate_snapshot,
 };
+use elephant_ladder_dictionary_pack_builder::{AudioBuildOptions, build_audio_collection};
+#[cfg(feature = "transcode")]
+use elephant_ladder_dictionary_pack_builder::{MAX_RECORDING_SECONDS, transcode_to_opus};
 use sha2::{Digest, Sha256};
 
 const PROGRESS_INTERVAL_BYTES: u64 = 64 * 1024 * 1024;
@@ -244,25 +246,14 @@ fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), St
             revision,
             "--output",
             output,
+            delivery @ ..,
         ] => {
-            let edition: EditionConfig = read_json(edition)?;
-            let audio = edition
-                .audio
-                .ok_or_else(|| "edition has no audio configuration".to_owned())?;
-            let state =
-                AcquisitionState::open(Path::new(state)).map_err(|error| error.to_string())?;
-            let options = AudioBuildOptions {
-                builder_revision: (*revision).to_owned(),
-                minimum_app_version: edition.minimum_app_version,
-                workers: std::thread::available_parallelism().map_or(1, usize::from),
+            let delivery = match delivery {
+                [] => AudioDelivery::Bundled,
+                ["--index-only"] => AudioDelivery::Remote,
+                _ => return Err(usage(program)),
             };
-            let result = build_audio_collection(&state, &audio, &options, Path::new(output))
-                .map_err(|error| error.to_string())?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&result).map_err(|error| error.to_string())?
-            );
-            Ok(())
+            run_audio_build(state, edition, revision, output, delivery)
         }
         ["validate", "--collection", collection] => {
             let directory = Path::new(collection);
@@ -289,6 +280,7 @@ fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), St
             println!("blob_bytes={}", report.blob_bytes);
             Ok(())
         }
+        #[cfg(feature = "transcode")]
         ["transcode", "--input", input, "--output", output] => {
             let source =
                 std::fs::read(input).map_err(|error| format!("cannot read {input}: {error}"))?;
@@ -299,6 +291,10 @@ fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), St
             println!("bytes={}", transcoded.bytes.len());
             println!("duration_ms={}", transcoded.duration_ms);
             Ok(())
+        }
+        #[cfg(not(feature = "transcode"))]
+        ["build" | "transcode", ..] => {
+            Err("this build cannot encode audio; rebuild with the transcode feature".to_owned())
         }
         _ => Err(usage(program)),
     }
@@ -434,9 +430,36 @@ fn print_format_version() {
     println!("unicode_profile={UNICODE_PROFILE}");
 }
 
+fn run_audio_build(
+    state: &str,
+    edition: &str,
+    revision: &str,
+    output: &str,
+    delivery: AudioDelivery,
+) -> Result<(), String> {
+    let edition: EditionConfig = read_json(edition)?;
+    let audio = edition
+        .audio
+        .ok_or_else(|| "edition has no audio configuration".to_owned())?;
+    let state = AcquisitionState::open(Path::new(state)).map_err(|error| error.to_string())?;
+    let options = AudioBuildOptions {
+        builder_revision: revision.to_owned(),
+        minimum_app_version: edition.minimum_app_version,
+        workers: std::thread::available_parallelism().map_or(1, usize::from),
+        delivery,
+    };
+    let result = build_audio_collection(&state, &audio, &options, Path::new(output))
+        .map_err(|error| error.to_string())?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result).map_err(|error| error.to_string())?
+    );
+    Ok(())
+}
+
 fn usage(program: &std::ffi::OsStr) -> String {
     format!(
-        "usage: {program} format-version\n       {program} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --contact URL_OR_EMAIL [--shard ORDINAL/TOTAL]\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} source manifest --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION\n       {program} catalog keygen --output SIGNING_KEY\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n       {program} catalog sign --release RELEASE_DIRECTORY --key SIGNING_KEY\n\n`--input -` reads decompressed JSONL from standard input.",
+        "usage: {program} format-version\n       {program} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --contact URL_OR_EMAIL [--shard ORDINAL/TOTAL]\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY [--index-only]\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} source manifest --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION\n       {program} catalog keygen --output SIGNING_KEY\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n       {program} catalog sign --release RELEASE_DIRECTORY --key SIGNING_KEY\n\n`--input -` reads decompressed JSONL from standard input.",
         program = program.to_string_lossy(),
     )
 }

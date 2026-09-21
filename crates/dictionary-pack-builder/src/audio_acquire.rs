@@ -132,13 +132,36 @@ pub fn acquire(
         cursor = options.shard.map(|_| last);
     }
 
-    let completed = state.complete_if_settled(&utc_now())?;
+    let completed = match options.shard {
+        None => state.complete_if_settled(&utc_now())?,
+        // Every worker's database lists the whole acquisition, so a shard is finished when
+        // its own names are, while the other shards' names are still pending there.
+        Some(_) => shard_settled(state, options.shard)?,
+    };
     let phases = state
         .phase_counts()?
         .into_iter()
         .map(|(phase, count)| (phase.as_str(), count))
         .collect();
     Ok(AcquireReport { phases, completed })
+}
+
+/// Whether this run's shard has nothing left to resolve or download.
+fn shard_settled(state: &AcquisitionState, shard: Option<(u32, u32)>) -> Result<bool, BuildError> {
+    for phase in [Phase::Pending, Phase::Resolved] {
+        let mut cursor: Option<String> = None;
+        loop {
+            let names = state.names_in_phase_after(phase, cursor.as_deref(), DOWNLOAD_BATCH)?;
+            let Some(last) = names.last().cloned() else {
+                break;
+            };
+            if !retain_shard(names, shard).is_empty() {
+                return Ok(false);
+            }
+            cursor = Some(last);
+        }
+    }
+    Ok(true)
 }
 
 /// Keeps the names belonging to this run's shard.

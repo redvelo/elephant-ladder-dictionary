@@ -84,6 +84,7 @@ pub struct AudioRevisionInputs<'a> {
     pub acquired_at: &'a str,
     pub encoder_profile: &'a str,
     pub builder_revision: &'a str,
+    pub delivery: &'a str,
     pub chunk_count: u64,
     /// Digest of every recording's acquired facts, in file name order.
     pub recording_input_digest: &'a [u8; 32],
@@ -134,6 +135,7 @@ impl PackRevision {
         digest.field(inputs.acquired_at.as_bytes());
         digest.field(inputs.encoder_profile.as_bytes());
         digest.field(inputs.builder_revision.as_bytes());
+        digest.field(inputs.delivery.as_bytes());
         digest.field(&inputs.chunk_count.to_be_bytes());
         digest.field(inputs.recording_input_digest);
         digest.field(inputs.minimum_app_version.as_bytes());

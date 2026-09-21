@@ -9,6 +9,7 @@ mod manifest;
 mod report;
 mod snapshot;
 mod source;
+#[cfg(feature = "transcode")]
 mod transcode;
 
 pub use audio_acquire::{
@@ -23,8 +24,8 @@ pub use audio_state::{
 };
 pub use builder::{BuildError, BuildOptions, BuildResult, build_pack};
 pub use catalog::{
-    CatalogBuildError, CatalogConfig, CorpusConfig, assemble_catalog, generate_signing_key,
-    read_signing_key, release_manifest_name, sign_catalog,
+    AudioConfig, CatalogBuildError, CatalogConfig, CorpusConfig, assemble_catalog,
+    generate_signing_key, read_signing_key, release_manifest_name, sign_catalog,
 };
 pub use manifest::{AssetManifest, BuildManifest, PackAsset, PackManifest, Sha256Hex};
 pub use report::{
@@ -37,4 +38,5 @@ pub use snapshot::{
     build_manifest, validate_snapshot,
 };
 pub use source::{JsonlSourceReader, SourceIngestionError, SourceRecord};
+#[cfg(feature = "transcode")]
 pub use transcode::{TranscodeError, Transcoded, transcode_to_opus};
