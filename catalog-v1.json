@@ -1,0 +1,846 @@
+{
+  "catalog_version": 1,
+  "catalog_revision": "2026-09-30.1",
+  "generated_at": "2026-09-30T19:30:00Z",
+  "packs": [
+    {
+      "pack_type": "corpus",
+      "release": {
+        "pack_id": "wiktionary-fr-fr",
+        "pack_revision": "92c0ba0344e6823e13faa889e87087b63f8d8d436a6951af931b2edf68773786",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 2612823182,
+        "assets": [
+          {
+            "file_name": "pack-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-fr-92c0ba0344e6823e13faa889e87087b63f8d8d436a6951af931b2edf68773786-pack-manifest-v1.json",
+            "size_bytes": 1166,
+            "sha256": "0dd35f428518bfece252fe93a26275b903a90768381f8887b53888e07b6a8088"
+          },
+          {
+            "file_name": "wiktionary-fr-fr-92c0ba0344e6823e13faa889e87087b63f8d8d436a6951af931b2edf68773786-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-fr-92c0ba0344e6823e13faa889e87087b63f8d8d436a6951af931b2edf68773786-index.eldict",
+            "size_bytes": 1187151872,
+            "sha256": "399e8e9dc078eb75400cec952ed37cfce0f6fbae185cbdcfc283b03d9856a853"
+          },
+          {
+            "file_name": "wiktionary-fr-fr-92c0ba0344e6823e13faa889e87087b63f8d8d436a6951af931b2edf68773786-data-000.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-fr-92c0ba0344e6823e13faa889e87087b63f8d8d436a6951af931b2edf68773786-data-000.eldict",
+            "size_bytes": 796897280,
+            "sha256": "b0c449faafec14814095753e3732a595167eedf2f9e316fd0c1573a1a7d6ae61"
+          },
+          {
+            "file_name": "wiktionary-fr-fr-92c0ba0344e6823e13faa889e87087b63f8d8d436a6951af931b2edf68773786-data-001.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-fr-92c0ba0344e6823e13faa889e87087b63f8d8d436a6951af931b2edf68773786-data-001.eldict",
+            "size_bytes": 628772864,
+            "sha256": "83b50754c376c4c9f8360a9d402e7a7872d91d0185bae88a845a5d377b0bcb90"
+          }
+        ]
+      },
+      "corpus_language": "fr",
+      "wiktionary_edition": "frwiktionary",
+      "wiktionary_dump_date": "2026-09-01",
+      "monolingual": true,
+      "bilingual_targets": [
+        "en"
+      ],
+      "licenses": [
+        "CC-BY-SA-4.0",
+        "GFDL-1.3-only"
+      ]
+    },
+    {
+      "pack_type": "corpus",
+      "release": {
+        "pack_id": "wiktionary-en-en",
+        "pack_revision": "2a758a56d0ab0ca268667c3e6bdb36093ae91c65abe69e4a0f0ce3c1c72495c4",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 1719653517,
+        "assets": [
+          {
+            "file_name": "pack-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-en-2a758a56d0ab0ca268667c3e6bdb36093ae91c65abe69e4a0f0ce3c1c72495c4-pack-manifest-v1.json",
+            "size_bytes": 1165,
+            "sha256": "810673703a82b1719d626c449e21fea06ec52292c4784c2ae142d220a73ec57e"
+          },
+          {
+            "file_name": "wiktionary-en-en-2a758a56d0ab0ca268667c3e6bdb36093ae91c65abe69e4a0f0ce3c1c72495c4-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-en-2a758a56d0ab0ca268667c3e6bdb36093ae91c65abe69e4a0f0ce3c1c72495c4-index.eldict",
+            "size_bytes": 457211904,
+            "sha256": "cc789f94ec58ee167fbe4752f101fca3f4af5631a8f0dc1f05311e56b22186fa"
+          },
+          {
+            "file_name": "wiktionary-en-en-2a758a56d0ab0ca268667c3e6bdb36093ae91c65abe69e4a0f0ce3c1c72495c4-data-000.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-en-2a758a56d0ab0ca268667c3e6bdb36093ae91c65abe69e4a0f0ce3c1c72495c4-data-000.eldict",
+            "size_bytes": 742404096,
+            "sha256": "e4471a53d9d2e6d718c24475c50a2c379c6e7f4ce2c55fda6ee27ab949b75df8"
+          },
+          {
+            "file_name": "wiktionary-en-en-2a758a56d0ab0ca268667c3e6bdb36093ae91c65abe69e4a0f0ce3c1c72495c4-data-001.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-en-2a758a56d0ab0ca268667c3e6bdb36093ae91c65abe69e4a0f0ce3c1c72495c4-data-001.eldict",
+            "size_bytes": 520036352,
+            "sha256": "d1649a40901100b03bfc5f7a008d39860f8d1acf81a39a1a409edcd9e5761241"
+          }
+        ]
+      },
+      "corpus_language": "en",
+      "wiktionary_edition": "enwiktionary",
+      "wiktionary_dump_date": "2026-09-02",
+      "monolingual": true,
+      "bilingual_targets": [
+        "fr",
+        "es",
+        "de",
+        "it",
+        "ja",
+        "zh"
+      ],
+      "licenses": [
+        "CC-BY-SA-4.0",
+        "GFDL-1.3-only"
+      ]
+    },
+    {
+      "pack_type": "corpus",
+      "release": {
+        "pack_id": "wiktionary-es-es",
+        "pack_revision": "5aab9ec99c199906745c2061597d195cf93f9c3de3d89231ca680f81252aa54a",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 984662911,
+        "assets": [
+          {
+            "file_name": "pack-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-es-es-5aab9ec99c199906745c2061597d195cf93f9c3de3d89231ca680f81252aa54a-pack-manifest-v1.json",
+            "size_bytes": 895,
+            "sha256": "92a312251dd9a60bb34bf323cde85a6a6d65dd0211e4c82f48025096019a96d0"
+          },
+          {
+            "file_name": "wiktionary-es-es-5aab9ec99c199906745c2061597d195cf93f9c3de3d89231ca680f81252aa54a-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-es-es-5aab9ec99c199906745c2061597d195cf93f9c3de3d89231ca680f81252aa54a-index.eldict",
+            "size_bytes": 407347200,
+            "sha256": "935a6422a6281d04cc47631e312f2ff8f641a109808138bd1702ff322bee33a5"
+          },
+          {
+            "file_name": "wiktionary-es-es-5aab9ec99c199906745c2061597d195cf93f9c3de3d89231ca680f81252aa54a-data-000.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-es-es-5aab9ec99c199906745c2061597d195cf93f9c3de3d89231ca680f81252aa54a-data-000.eldict",
+            "size_bytes": 577314816,
+            "sha256": "f89b2be7a4660d8b1d8ee496835292306340883335e2c0350ffdb2989e2c7889"
+          }
+        ]
+      },
+      "corpus_language": "es",
+      "wiktionary_edition": "eswiktionary",
+      "wiktionary_dump_date": "2026-09-01",
+      "monolingual": true,
+      "bilingual_targets": [
+        "en"
+      ],
+      "licenses": [
+        "CC-BY-SA-4.0",
+        "GFDL-1.3-only"
+      ]
+    },
+    {
+      "pack_type": "corpus",
+      "release": {
+        "pack_id": "wiktionary-de-de",
+        "pack_revision": "ddddadc3800db6ce27f42143bb9b3a3b9f272d2eb495a4df87094d37e3ee1950",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 1653884045,
+        "assets": [
+          {
+            "file_name": "pack-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-de-ddddadc3800db6ce27f42143bb9b3a3b9f272d2eb495a4df87094d37e3ee1950-pack-manifest-v1.json",
+            "size_bytes": 1165,
+            "sha256": "cb0add9f5225cd39bf9cdbf045896a7bbb06794aad783e3d9c0223a2c156eac8"
+          },
+          {
+            "file_name": "wiktionary-de-de-ddddadc3800db6ce27f42143bb9b3a3b9f272d2eb495a4df87094d37e3ee1950-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-de-ddddadc3800db6ce27f42143bb9b3a3b9f272d2eb495a4df87094d37e3ee1950-index.eldict",
+            "size_bytes": 678047744,
+            "sha256": "df1bf85d8ccdf659dfb9b0ad30d9b07bfad43bcac85736a1d4cf2ccdb7e49959"
+          },
+          {
+            "file_name": "wiktionary-de-de-ddddadc3800db6ce27f42143bb9b3a3b9f272d2eb495a4df87094d37e3ee1950-data-000.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-de-ddddadc3800db6ce27f42143bb9b3a3b9f272d2eb495a4df87094d37e3ee1950-data-000.eldict",
+            "size_bytes": 746799104,
+            "sha256": "220d2b9798527f8c1591ae55e73da35f50c9bb2c9c63cc86d1b8d83b21a4cdbe"
+          },
+          {
+            "file_name": "wiktionary-de-de-ddddadc3800db6ce27f42143bb9b3a3b9f272d2eb495a4df87094d37e3ee1950-data-001.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-de-ddddadc3800db6ce27f42143bb9b3a3b9f272d2eb495a4df87094d37e3ee1950-data-001.eldict",
+            "size_bytes": 229036032,
+            "sha256": "6926f3f6b75ee14e7407cb3bf023e552fd38acc4d0077f10826fbe7eac042183"
+          }
+        ]
+      },
+      "corpus_language": "de",
+      "wiktionary_edition": "dewiktionary",
+      "wiktionary_dump_date": "2026-09-01",
+      "monolingual": true,
+      "bilingual_targets": [
+        "en"
+      ],
+      "licenses": [
+        "CC-BY-SA-4.0",
+        "GFDL-1.3-only"
+      ]
+    },
+    {
+      "pack_type": "corpus",
+      "release": {
+        "pack_id": "wiktionary-it-it",
+        "pack_revision": "2b1c8a5408c0a228becf1de0dda408d8bb7d2d63de561e1950e9d3f160ec8c60",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 457319294,
+        "assets": [
+          {
+            "file_name": "pack-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-it-it-2b1c8a5408c0a228becf1de0dda408d8bb7d2d63de561e1950e9d3f160ec8c60-pack-manifest-v1.json",
+            "size_bytes": 894,
+            "sha256": "a0fadbd1f413af632da4115aaeb43ddb147a4ae072618e0c1167841d97294951"
+          },
+          {
+            "file_name": "wiktionary-it-it-2b1c8a5408c0a228becf1de0dda408d8bb7d2d63de561e1950e9d3f160ec8c60-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-it-it-2b1c8a5408c0a228becf1de0dda408d8bb7d2d63de561e1950e9d3f160ec8c60-index.eldict",
+            "size_bytes": 195710976,
+            "sha256": "f41be6694855dd455401578cef6b365fec3bfa9daffb401879e5d9341168b584"
+          },
+          {
+            "file_name": "wiktionary-it-it-2b1c8a5408c0a228becf1de0dda408d8bb7d2d63de561e1950e9d3f160ec8c60-data-000.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-it-it-2b1c8a5408c0a228becf1de0dda408d8bb7d2d63de561e1950e9d3f160ec8c60-data-000.eldict",
+            "size_bytes": 261607424,
+            "sha256": "474030b28950b49a8d4fbbfa74cb56e4f619839f7d3f6c87ba4efd7673b686fd"
+          }
+        ]
+      },
+      "corpus_language": "it",
+      "wiktionary_edition": "itwiktionary",
+      "wiktionary_dump_date": "2026-09-01",
+      "monolingual": true,
+      "bilingual_targets": [
+        "en"
+      ],
+      "licenses": [
+        "CC-BY-SA-4.0",
+        "GFDL-1.3-only"
+      ]
+    },
+    {
+      "pack_type": "corpus",
+      "release": {
+        "pack_id": "wiktionary-ja-ja",
+        "pack_revision": "68fc96c1c9adb282eaff9b0f1defc3cdd6409c954f9a26948471894cffa74329",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 164844412,
+        "assets": [
+          {
+            "file_name": "pack-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-ja-ja-68fc96c1c9adb282eaff9b0f1defc3cdd6409c954f9a26948471894cffa74329-pack-manifest-v1.json",
+            "size_bytes": 892,
+            "sha256": "b76d30074dbe161adc267fdb9a36b06500de39640a29e6912d73d3dbd647285c"
+          },
+          {
+            "file_name": "wiktionary-ja-ja-68fc96c1c9adb282eaff9b0f1defc3cdd6409c954f9a26948471894cffa74329-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-ja-ja-68fc96c1c9adb282eaff9b0f1defc3cdd6409c954f9a26948471894cffa74329-index.eldict",
+            "size_bytes": 75542528,
+            "sha256": "f5d9bbb6ecf734e9cf01a75c8297320345316632e6d703f7dcb2abce54073abe"
+          },
+          {
+            "file_name": "wiktionary-ja-ja-68fc96c1c9adb282eaff9b0f1defc3cdd6409c954f9a26948471894cffa74329-data-000.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-ja-ja-68fc96c1c9adb282eaff9b0f1defc3cdd6409c954f9a26948471894cffa74329-data-000.eldict",
+            "size_bytes": 89300992,
+            "sha256": "6e3d9d6d57321169b9e93f58029eb799555aadb4d594e36dc9bc6faebddcf078"
+          }
+        ]
+      },
+      "corpus_language": "ja",
+      "wiktionary_edition": "jawiktionary",
+      "wiktionary_dump_date": "2026-09-01",
+      "monolingual": true,
+      "bilingual_targets": [
+        "en"
+      ],
+      "licenses": [
+        "CC-BY-SA-4.0",
+        "GFDL-1.3-only"
+      ]
+    },
+    {
+      "pack_type": "corpus",
+      "release": {
+        "pack_id": "wiktionary-zh-zh",
+        "pack_revision": "28c73500d2b7e5359e15da86e73dbe6bdf7f8642aa86b1e218361e6f6857c4d1",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 352895869,
+        "assets": [
+          {
+            "file_name": "pack-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-zh-zh-28c73500d2b7e5359e15da86e73dbe6bdf7f8642aa86b1e218361e6f6857c4d1-pack-manifest-v1.json",
+            "size_bytes": 893,
+            "sha256": "52ee77b53948610ffe5e425055eb12ab8572f494d65e5fb1942c61d879de6eca"
+          },
+          {
+            "file_name": "wiktionary-zh-zh-28c73500d2b7e5359e15da86e73dbe6bdf7f8642aa86b1e218361e6f6857c4d1-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-zh-zh-28c73500d2b7e5359e15da86e73dbe6bdf7f8642aa86b1e218361e6f6857c4d1-index.eldict",
+            "size_bytes": 73318400,
+            "sha256": "76cb43515834dd9bd2be8b0b63918c377bee04f86af8811a3aedf2167b52e4f8"
+          },
+          {
+            "file_name": "wiktionary-zh-zh-28c73500d2b7e5359e15da86e73dbe6bdf7f8642aa86b1e218361e6f6857c4d1-data-000.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-zh-zh-28c73500d2b7e5359e15da86e73dbe6bdf7f8642aa86b1e218361e6f6857c4d1-data-000.eldict",
+            "size_bytes": 279576576,
+            "sha256": "2a19c9b9c888950d29f8fb4a1e511d7607d73fa5faa35efd7804bbaa12cab99f"
+          }
+        ]
+      },
+      "corpus_language": "zh",
+      "wiktionary_edition": "zhwiktionary",
+      "wiktionary_dump_date": "2026-09-01",
+      "monolingual": true,
+      "bilingual_targets": [
+        "en"
+      ],
+      "licenses": [
+        "CC-BY-SA-4.0",
+        "GFDL-1.3-only"
+      ]
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-fr-audio",
+        "pack_revision": "ad63a8dc80e545a12095aacbfc604004cae9ca88e877284d7a6fd55dcd13e1ea",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 66662861,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-audio-ad63a8dc80e545a12095aacbfc604004cae9ca88e877284d7a6fd55dcd13e1ea-audio-manifest-v1.json",
+            "size_bytes": 461,
+            "sha256": "af335d607115e4bf348eb3305190a6f6e65f9bd10eee382b306eb2244c6841ae"
+          },
+          {
+            "file_name": "wiktionary-fr-audio-ad63a8dc80e545a12095aacbfc604004cae9ca88e877284d7a6fd55dcd13e1ea-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-audio-ad63a8dc80e545a12095aacbfc604004cae9ca88e877284d7a6fd55dcd13e1ea-index.eldict",
+            "size_bytes": 66662400,
+            "sha256": "ce6990b4ff84a42ed0ab13bd98a0bf9f59452c228c1869bc35c92fde71bef03d"
+          }
+        ]
+      },
+      "corpus_language": "fr",
+      "recordings": {
+        "available": 383287,
+        "unqualified": 17,
+        "missing": 6,
+        "failed": 509
+      },
+      "delivery": "remote"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-fr-audio",
+        "pack_revision": "bc7ed99613e367a60cb4cd00b48de30fb7dea9f0ab2aa48cc335a5199be7e9f0",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 1953756501,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-audio-bc7ed99613e367a60cb4cd00b48de30fb7dea9f0ab2aa48cc335a5199be7e9f0-audio-manifest-v1.json",
+            "size_bytes": 1365,
+            "sha256": "4770eb409239af490f4cde19a7b90b5ceeb2afc1c3ae3a4ff790c7f35894832f"
+          },
+          {
+            "file_name": "wiktionary-fr-audio-bc7ed99613e367a60cb4cd00b48de30fb7dea9f0ab2aa48cc335a5199be7e9f0-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-audio-bc7ed99613e367a60cb4cd00b48de30fb7dea9f0ab2aa48cc335a5199be7e9f0-index.eldict",
+            "size_bytes": 94171136,
+            "sha256": "e4053950762132c3c44cd42d0ea11d26bd6fa5c7b07e56438f50b5df86e731ea"
+          },
+          {
+            "file_name": "wiktionary-fr-audio-chunk-000-2322b4a952ce126d.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-audio-chunk-000-2322b4a952ce126d.eldict",
+            "size_bytes": 465444864,
+            "sha256": "2322b4a952ce126d4c0feffe14f3b3e216aa384a9100fb05297ee0396cf0178a"
+          },
+          {
+            "file_name": "wiktionary-fr-audio-chunk-001-86ade12b1c719688.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-audio-chunk-001-86ade12b1c719688.eldict",
+            "size_bytes": 465453056,
+            "sha256": "86ade12b1c7196885aa734ba4ab05fd88a08be2ce8c4a0099cd0d7fea2e65973"
+          },
+          {
+            "file_name": "wiktionary-fr-audio-chunk-002-7a74adc0ce86b6c5.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-audio-chunk-002-7a74adc0ce86b6c5.eldict",
+            "size_bytes": 465367040,
+            "sha256": "7a74adc0ce86b6c55244215aa1a077f5f705a2087e2c5e0a5d7130b475b1f164"
+          },
+          {
+            "file_name": "wiktionary-fr-audio-chunk-003-77e49e51362457f0.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-fr-audio-chunk-003-77e49e51362457f0.eldict",
+            "size_bytes": 463319040,
+            "sha256": "77e49e51362457f00744cf5f9c1c80e1de9e91b5cd3c6180fc171f7482b1446a"
+          }
+        ]
+      },
+      "corpus_language": "fr",
+      "recordings": {
+        "available": 383285,
+        "unqualified": 17,
+        "missing": 6,
+        "failed": 511
+      },
+      "delivery": "bundled"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-en-audio",
+        "pack_revision": "b93f5987246b8e4eb5d4346856fac6f5d017aaec94beed0bb85a1f67235a9e06",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 15725005,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-audio-b93f5987246b8e4eb5d4346856fac6f5d017aaec94beed0bb85a1f67235a9e06-audio-manifest-v1.json",
+            "size_bytes": 461,
+            "sha256": "3d3470a2b302c00437c4e00433f0467d7b29876aae2378b2e27509a271c16bd1"
+          },
+          {
+            "file_name": "wiktionary-en-audio-b93f5987246b8e4eb5d4346856fac6f5d017aaec94beed0bb85a1f67235a9e06-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-audio-b93f5987246b8e4eb5d4346856fac6f5d017aaec94beed0bb85a1f67235a9e06-index.eldict",
+            "size_bytes": 15724544,
+            "sha256": "deeffdea51dfc964ac24a3a8ec011397d53b956c7fbe98fbd38038105e5690bb"
+          }
+        ]
+      },
+      "corpus_language": "en",
+      "recordings": {
+        "available": 101255,
+        "unqualified": 16,
+        "missing": 1,
+        "failed": 0
+      },
+      "delivery": "remote"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-en-audio",
+        "pack_revision": "ccfd8a4cd7194025f273e0f59854b9d8e2d2471e041ad79d9166e492f9f5c391",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 528245423,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-audio-ccfd8a4cd7194025f273e0f59854b9d8e2d2471e041ad79d9166e492f9f5c391-audio-manifest-v1.json",
+            "size_bytes": 687,
+            "sha256": "1eabf31af14137ab3b702931f33c07d9d6d682a6ec2d0da5c5cf7f3d8d70dd65"
+          },
+          {
+            "file_name": "wiktionary-en-audio-ccfd8a4cd7194025f273e0f59854b9d8e2d2471e041ad79d9166e492f9f5c391-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-audio-ccfd8a4cd7194025f273e0f59854b9d8e2d2471e041ad79d9166e492f9f5c391-index.eldict",
+            "size_bytes": 22880256,
+            "sha256": "9919c268b6dba2c2d8b25c492e3f3f09709b9255b1283377dfcf22325c634378"
+          },
+          {
+            "file_name": "wiktionary-en-audio-chunk-000-c674cec70dcb0686.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-en-audio-chunk-000-c674cec70dcb0686.eldict",
+            "size_bytes": 505364480,
+            "sha256": "c674cec70dcb068609a1d5a1be8f05b134ddd738f417bd9549e1fbd4a1d2c0be"
+          }
+        ]
+      },
+      "corpus_language": "en",
+      "recordings": {
+        "available": 101249,
+        "unqualified": 16,
+        "missing": 1,
+        "failed": 6
+      },
+      "delivery": "bundled"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-es-audio",
+        "pack_revision": "ddaadb3dba5a0bf438ef65c87274b8ab0e851cf80e028d2d98343167fb0ba293",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 422347,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-es-audio-ddaadb3dba5a0bf438ef65c87274b8ab0e851cf80e028d2d98343167fb0ba293-audio-manifest-v1.json",
+            "size_bytes": 459,
+            "sha256": "8ab1dff01491301bb64bcc01a6607b3d96a1d554df61a151db70895fa8985629"
+          },
+          {
+            "file_name": "wiktionary-es-audio-ddaadb3dba5a0bf438ef65c87274b8ab0e851cf80e028d2d98343167fb0ba293-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-es-audio-ddaadb3dba5a0bf438ef65c87274b8ab0e851cf80e028d2d98343167fb0ba293-index.eldict",
+            "size_bytes": 421888,
+            "sha256": "66369e33337c4827bbed6aedad0bcf9116004b6144141ef6e90cc03c0d535a9c"
+          }
+        ]
+      },
+      "corpus_language": "es",
+      "recordings": {
+        "available": 2307,
+        "unqualified": 0,
+        "missing": 1,
+        "failed": 0
+      },
+      "delivery": "remote"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-es-audio",
+        "pack_revision": "ce1b991495a88d582dd85e7908e9afd6ff83eed3ad796e0ecd1e119a77575b65",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 12083884,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-es-audio-ce1b991495a88d582dd85e7908e9afd6ff83eed3ad796e0ecd1e119a77575b65-audio-manifest-v1.json",
+            "size_bytes": 684,
+            "sha256": "d9613cd533c080de17f9175f9cf6ef3492476a02411b2f646bdf7c8a082a22ca"
+          },
+          {
+            "file_name": "wiktionary-es-audio-ce1b991495a88d582dd85e7908e9afd6ff83eed3ad796e0ecd1e119a77575b65-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-es-audio-ce1b991495a88d582dd85e7908e9afd6ff83eed3ad796e0ecd1e119a77575b65-index.eldict",
+            "size_bytes": 581632,
+            "sha256": "b90830fdbfac50debe8799222e0e2159770afdf3ebf56556392ea9e85ed4a2a0"
+          },
+          {
+            "file_name": "wiktionary-es-audio-chunk-000-90481cf2d9bf9059.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-es-audio-chunk-000-90481cf2d9bf9059.eldict",
+            "size_bytes": 11501568,
+            "sha256": "90481cf2d9bf9059bd166d6163351adb4d4505daed9534d388cf6786b77cb82e"
+          }
+        ]
+      },
+      "corpus_language": "es",
+      "recordings": {
+        "available": 2305,
+        "unqualified": 0,
+        "missing": 1,
+        "failed": 2
+      },
+      "delivery": "bundled"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-it-audio",
+        "pack_revision": "85c2b0596bee265585f4829b15378b399515067b15de4d23f50fcd7023117225",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 106955,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-it-audio-85c2b0596bee265585f4829b15378b399515067b15de4d23f50fcd7023117225-audio-manifest-v1.json",
+            "size_bytes": 459,
+            "sha256": "f55af0233ff4de71e87f825822d69a7fc6e6ee7c37e5a37c9627c677e3b7f86f"
+          },
+          {
+            "file_name": "wiktionary-it-audio-85c2b0596bee265585f4829b15378b399515067b15de4d23f50fcd7023117225-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-it-audio-85c2b0596bee265585f4829b15378b399515067b15de4d23f50fcd7023117225-index.eldict",
+            "size_bytes": 106496,
+            "sha256": "c97513dd929f5e4a66f81ba9a99f49ce16e51aaa174bdd66c2fa12756430612d"
+          }
+        ]
+      },
+      "corpus_language": "it",
+      "recordings": {
+        "available": 500,
+        "unqualified": 0,
+        "missing": 0,
+        "failed": 0
+      },
+      "delivery": "remote"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-it-audio",
+        "pack_revision": "72c27ecea2531d80b65a5ca9b0a936dc0d4f31919f801b2faff84234b91406f5",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 3285675,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-it-audio-72c27ecea2531d80b65a5ca9b0a936dc0d4f31919f801b2faff84234b91406f5-audio-manifest-v1.json",
+            "size_bytes": 683,
+            "sha256": "27c8373803e6802862b1849feb8b1fad40f0eef5f03efbbe2660981d4e163497"
+          },
+          {
+            "file_name": "wiktionary-it-audio-72c27ecea2531d80b65a5ca9b0a936dc0d4f31919f801b2faff84234b91406f5-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-it-audio-72c27ecea2531d80b65a5ca9b0a936dc0d4f31919f801b2faff84234b91406f5-index.eldict",
+            "size_bytes": 139264,
+            "sha256": "0e345e5d1787f974cdea4e8df4bfe3111eb488355471c3912f2c54c44a686fd4"
+          },
+          {
+            "file_name": "wiktionary-it-audio-chunk-000-8ba2b387ae413262.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-it-audio-chunk-000-8ba2b387ae413262.eldict",
+            "size_bytes": 3145728,
+            "sha256": "8ba2b387ae41326288b26afb397dc93b16bf6df5d6ce0f5219be3cafb87963e3"
+          }
+        ]
+      },
+      "corpus_language": "it",
+      "recordings": {
+        "available": 500,
+        "unqualified": 0,
+        "missing": 0,
+        "failed": 0
+      },
+      "delivery": "bundled"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-ja-audio",
+        "pack_revision": "a590ac7337e25634491a68178d22f5d10d10162fa31332e89c6d4be1d4ddba2f",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 53706,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-ja-audio-a590ac7337e25634491a68178d22f5d10d10162fa31332e89c6d4be1d4ddba2f-audio-manifest-v1.json",
+            "size_bytes": 458,
+            "sha256": "1d287060f506e812e41ae6ca7a9d1fd24a491ac9e78f3e81dafffdf8987aff95"
+          },
+          {
+            "file_name": "wiktionary-ja-audio-a590ac7337e25634491a68178d22f5d10d10162fa31332e89c6d4be1d4ddba2f-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-ja-audio-a590ac7337e25634491a68178d22f5d10d10162fa31332e89c6d4be1d4ddba2f-index.eldict",
+            "size_bytes": 53248,
+            "sha256": "4cf21fa87aaa0dfa12abe99cd18e5b1d38dbe57abb7d9fc68be96577808c47db"
+          }
+        ]
+      },
+      "corpus_language": "ja",
+      "recordings": {
+        "available": 86,
+        "unqualified": 0,
+        "missing": 0,
+        "failed": 0
+      },
+      "delivery": "remote"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-ja-audio",
+        "pack_revision": "8b75cf32719f9ad0099262939ae69ffa50407cbe52250dcf27d537a7c08898ba",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 516777,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-ja-audio-8b75cf32719f9ad0099262939ae69ffa50407cbe52250dcf27d537a7c08898ba-audio-manifest-v1.json",
+            "size_bytes": 681,
+            "sha256": "16985792150ff799641fe4d51e857a43bfaa4a3798333d8b64da882f8dcaaa1c"
+          },
+          {
+            "file_name": "wiktionary-ja-audio-8b75cf32719f9ad0099262939ae69ffa50407cbe52250dcf27d537a7c08898ba-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-ja-audio-8b75cf32719f9ad0099262939ae69ffa50407cbe52250dcf27d537a7c08898ba-index.eldict",
+            "size_bytes": 61440,
+            "sha256": "f44bb8c4429c6bd64c3aade9f3599cb01b605d8297ad577946860b78a73e3514"
+          },
+          {
+            "file_name": "wiktionary-ja-audio-chunk-000-910861800e16d13d.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-ja-audio-chunk-000-910861800e16d13d.eldict",
+            "size_bytes": 454656,
+            "sha256": "910861800e16d13d8474cbf3bd9e49e765ee799035034a9f5f8d532879bbc5d7"
+          }
+        ]
+      },
+      "corpus_language": "ja",
+      "recordings": {
+        "available": 86,
+        "unqualified": 0,
+        "missing": 0,
+        "failed": 0
+      },
+      "delivery": "bundled"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-zh-audio",
+        "pack_revision": "04ea5ab01487f0f499afbffea0aaaac6bbd61c3e584c696262fc3157da56f249",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 659915,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-zh-audio-04ea5ab01487f0f499afbffea0aaaac6bbd61c3e584c696262fc3157da56f249-audio-manifest-v1.json",
+            "size_bytes": 459,
+            "sha256": "3f5633e1d8656052b5ad5ffada8104effacbe6e1deb13b267407122365d07f8c"
+          },
+          {
+            "file_name": "wiktionary-zh-audio-04ea5ab01487f0f499afbffea0aaaac6bbd61c3e584c696262fc3157da56f249-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-zh-audio-04ea5ab01487f0f499afbffea0aaaac6bbd61c3e584c696262fc3157da56f249-index.eldict",
+            "size_bytes": 659456,
+            "sha256": "e7fa8c725fc67c30a2b34c799d1e3aaa2530954cc6b5d39ba59e97bc335c0bb4"
+          }
+        ]
+      },
+      "corpus_language": "zh",
+      "recordings": {
+        "available": 4497,
+        "unqualified": 1,
+        "missing": 2,
+        "failed": 0
+      },
+      "delivery": "remote"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-zh-audio",
+        "pack_revision": "1084894225b9e3d482446d7b5ef9c90ee10b780ac3655ea9c12167a2c3a85bc1",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 22373036,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-zh-audio-1084894225b9e3d482446d7b5ef9c90ee10b780ac3655ea9c12167a2c3a85bc1-audio-manifest-v1.json",
+            "size_bytes": 684,
+            "sha256": "b5b27b7ba913e8f724bbb78d297aa8aabfd07c9424415f9fb0ab9c8b04408582"
+          },
+          {
+            "file_name": "wiktionary-zh-audio-1084894225b9e3d482446d7b5ef9c90ee10b780ac3655ea9c12167a2c3a85bc1-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-zh-audio-1084894225b9e3d482446d7b5ef9c90ee10b780ac3655ea9c12167a2c3a85bc1-index.eldict",
+            "size_bytes": 966656,
+            "sha256": "03f5bd5a0c8af60f9b6b4755fbde7b09514618459182de2ea98a5873a0b0e547"
+          },
+          {
+            "file_name": "wiktionary-zh-audio-chunk-000-c47305fd91ff78d3.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-zh-audio-chunk-000-c47305fd91ff78d3.eldict",
+            "size_bytes": 21405696,
+            "sha256": "c47305fd91ff78d3f340326173ba9cc9f5a5cd67b631aaf225947e313bf0c808"
+          }
+        ]
+      },
+      "corpus_language": "zh",
+      "recordings": {
+        "available": 4497,
+        "unqualified": 1,
+        "missing": 2,
+        "failed": 0
+      },
+      "delivery": "bundled"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-de-audio",
+        "pack_revision": "b54dbb6467dfbf1fe9b6ecb88f9cbf4f08dbcec1d22f2fed3cb61959f2c2e5df",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 128573902,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-b54dbb6467dfbf1fe9b6ecb88f9cbf4f08dbcec1d22f2fed3cb61959f2c2e5df-audio-manifest-v1.json",
+            "size_bytes": 462,
+            "sha256": "8b2dade2ed0b95b1e6cc697f88346bd44755a2f7e08e9f3073fe140b900157ff"
+          },
+          {
+            "file_name": "wiktionary-de-audio-b54dbb6467dfbf1fe9b6ecb88f9cbf4f08dbcec1d22f2fed3cb61959f2c2e5df-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-b54dbb6467dfbf1fe9b6ecb88f9cbf4f08dbcec1d22f2fed3cb61959f2c2e5df-index.eldict",
+            "size_bytes": 128573440,
+            "sha256": "87a24fc2b6353d61896e4f152b91eea74e6b0157ae81ce8e7ab798c202594580"
+          }
+        ]
+      },
+      "corpus_language": "de",
+      "recordings": {
+        "available": 1000895,
+        "unqualified": 1,
+        "missing": 2,
+        "failed": 0
+      },
+      "delivery": "remote"
+    },
+    {
+      "pack_type": "audio",
+      "release": {
+        "pack_id": "wiktionary-de-audio",
+        "pack_revision": "430b9272d60b340ffe9390415b246265da704276c9aaba95554da2b882c01d9d",
+        "minimum_app_version": "0.1.0",
+        "installed_bytes": 8066083038,
+        "assets": [
+          {
+            "file_name": "audio-manifest-v1.json",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-430b9272d60b340ffe9390415b246265da704276c9aaba95554da2b882c01d9d-audio-manifest-v1.json",
+            "size_bytes": 2270,
+            "sha256": "572c0d2692872d8d7f9f0c53e94b839adee2f93f294895c79005705732618367"
+          },
+          {
+            "file_name": "wiktionary-de-audio-430b9272d60b340ffe9390415b246265da704276c9aaba95554da2b882c01d9d-index.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-430b9272d60b340ffe9390415b246265da704276c9aaba95554da2b882c01d9d-index.eldict",
+            "size_bytes": 200757248,
+            "sha256": "b2744fe880f3590fc04c7848bcce1564333a327d46fb8bbc36fbbc69f1bf8ec4"
+          },
+          {
+            "file_name": "wiktionary-de-audio-chunk-000-82c8499363eb6bc9.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-chunk-000-82c8499363eb6bc9.eldict",
+            "size_bytes": 981057536,
+            "sha256": "82c8499363eb6bc9ca16778be77de96e0e871fad1d0cdfda9112328d5fd19857"
+          },
+          {
+            "file_name": "wiktionary-de-audio-chunk-001-c14779d4264a146d.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-chunk-001-c14779d4264a146d.eldict",
+            "size_bytes": 982679552,
+            "sha256": "c14779d4264a146d418fa0514a07b3859eecde44dcc74851377129ff8cb84ac0"
+          },
+          {
+            "file_name": "wiktionary-de-audio-chunk-002-b522b6db4e0c5bf7.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-chunk-002-b522b6db4e0c5bf7.eldict",
+            "size_bytes": 982388736,
+            "sha256": "b522b6db4e0c5bf728880b730550e6d3563e7f9efc9014b880256daf963c211a"
+          },
+          {
+            "file_name": "wiktionary-de-audio-chunk-003-c5476981d5993d80.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-chunk-003-c5476981d5993d80.eldict",
+            "size_bytes": 985231360,
+            "sha256": "c5476981d5993d80a9f20f0e8626f8230565e4c3aefd9892add203069b697349"
+          },
+          {
+            "file_name": "wiktionary-de-audio-chunk-004-076f30cf296b8cee.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-chunk-004-076f30cf296b8cee.eldict",
+            "size_bytes": 981676032,
+            "sha256": "076f30cf296b8cee6223f8a2422e579007aa692e5c4a9ef4d424271adf2b79e6"
+          },
+          {
+            "file_name": "wiktionary-de-audio-chunk-005-9a8527ada555e7d7.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-chunk-005-9a8527ada555e7d7.eldict",
+            "size_bytes": 980500480,
+            "sha256": "9a8527ada555e7d75af0dff2e93c0548098df68365551aa38b91c047cde00e95"
+          },
+          {
+            "file_name": "wiktionary-de-audio-chunk-006-b8253f840351ec40.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-chunk-006-b8253f840351ec40.eldict",
+            "size_bytes": 984326144,
+            "sha256": "b8253f840351ec40baad907cc0a3b6a81937819e7f51d948d8dd72ac23936900"
+          },
+          {
+            "file_name": "wiktionary-de-audio-chunk-007-e01e8390a66aae86.eldict",
+            "url": "https://github.com/redvelo/elephant-ladder-dictionary/releases/download/packs-2026-09-30.1/wiktionary-de-audio-chunk-007-e01e8390a66aae86.eldict",
+            "size_bytes": 987463680,
+            "sha256": "e01e8390a66aae86c0fc520db664b60e000f12ac24153b5c1d816729d34fd189"
+          }
+        ]
+      },
+      "corpus_language": "de",
+      "recordings": {
+        "available": 1000893,
+        "unqualified": 1,
+        "missing": 2,
+        "failed": 2
+      },
+      "delivery": "bundled"
+    }
+  ]
+}
