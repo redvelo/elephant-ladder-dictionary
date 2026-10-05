@@ -10,7 +10,6 @@ publish = false
 
 [dependencies]
 arc-swap.workspace = true
-ed25519-dalek.workspace = true
 hex.workspace = true
 icu_casemap.workspace = true
 icu_normalizer.workspace = true

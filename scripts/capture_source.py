@@ -145,7 +145,9 @@ def main():
         fail("the origin publishes no Last-Modified header to date the archive")
     modified = email.utils.parsedate_to_datetime(before[1]).date()
     age = (modified - datetime.date.fromisoformat(extraction_date)).days
-    if age not in (0, 1):
+    # Kaikki dates extractions in its own time zone, ahead of GMT, so an archive
+    # published late in the GMT day carries the next day's extraction date.
+    if age not in (-1, 0, 1):
         fail(
             f"the information page describes an extraction from {extraction_date}, but the "
             f"archive was modified {modified}; retry after Kaikki finishes publishing"

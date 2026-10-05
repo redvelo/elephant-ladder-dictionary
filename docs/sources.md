@@ -27,9 +27,10 @@ Run the **Snapshot Source** workflow with an edition name. It:
 1. Downloads the archive linked from the edition's information page, and fails if
    the ETag or Last-Modified header changes during the download.
 2. Requires the information page to link that exact archive and to describe an
-   extraction dated the same day as, or one day before, the archive's
-   Last-Modified date. Otherwise the page and archive describe different runs, and
-   capture must be retried later.
+   extraction dated within one day of the archive's Last-Modified date. Kaikki dates
+   extractions in its own time zone, ahead of GMT, so a late upload can carry the next
+   day's date. Otherwise the page and archive describe different runs, and capture
+   must be retried later.
 3. Records compressed and uncompressed digests, size, and line count.
 4. Splits the archive into parts of at most 1 GiB.
 5. Validates the snapshot and derives a build manifest.

@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
-use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -12,14 +11,12 @@ use crate::{
 
 /// The release asset name of a version-1 catalog.
 pub const CATALOG_FILE: &str = "catalog-v1.json";
-/// The release asset name of the detached catalog signature.
-pub const CATALOG_SIGNATURE_FILE: &str = "catalog-v1.json.sig";
 pub const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CATALOG_PACKS: usize = 256;
 const MAX_PACK_ASSETS: usize = 256;
 const MAX_CATALOG_TEXT_BYTES: usize = 2048;
 
-/// A signed description of immutable pack revisions available for installation.
+/// A description of immutable pack revisions available for installation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
@@ -138,78 +135,23 @@ pub struct RecordingCounts {
 pub enum CatalogError {
     #[error("catalog exceeds {MAX_CATALOG_BYTES} bytes")]
     TooLarge,
-    #[error("catalog signature is malformed")]
-    MalformedSignature,
-    #[error("catalog signature does not verify with a trusted key")]
-    UntrustedSignature,
     #[error("catalog is invalid: {0}")]
     Invalid(String),
 }
 
-/// Parses an Ed25519 public key from 64 lowercase hexadecimal characters.
+/// Parses and validates exact catalog bytes.
 ///
 /// # Errors
 ///
-/// Returns [`CatalogError::Invalid`] for a malformed or non-canonical key.
-pub fn parse_verifying_key(hex_key: &str) -> Result<VerifyingKey, CatalogError> {
-    let bytes = decode_lower_hex::<32>(hex_key)
-        .ok_or_else(|| CatalogError::Invalid("verifying key is not 32-byte hex".to_owned()))?;
-    VerifyingKey::from_bytes(&bytes)
-        .map_err(|_| CatalogError::Invalid("verifying key is not a valid point".to_owned()))
-}
-
-/// Encodes a detached signature as the exact contents of `catalog-v1.json.sig`.
-#[must_use]
-pub fn encode_signature(signature: &Signature) -> String {
-    format!("{}\n", hex::encode(signature.to_bytes()))
-}
-
-/// Verifies exact catalog bytes against a detached signature, then parses and
-/// validates the catalog.
-///
-/// # Errors
-///
-/// Returns an error when the catalog is too large, the signature is malformed or
-/// does not verify with any trusted key, or the catalog violates its format.
-pub fn verify_catalog(
-    catalog: &[u8],
-    signature: &[u8],
-    trusted_keys: &[VerifyingKey],
-) -> Result<Catalog, CatalogError> {
+/// Returns an error when the catalog is too large or violates its format.
+pub fn parse_catalog(catalog: &[u8]) -> Result<Catalog, CatalogError> {
     if catalog.len() > MAX_CATALOG_BYTES {
         return Err(CatalogError::TooLarge);
-    }
-    let signature = parse_signature(signature)?;
-    if !trusted_keys
-        .iter()
-        .any(|key| key.verify_strict(catalog, &signature).is_ok())
-    {
-        return Err(CatalogError::UntrustedSignature);
     }
     let catalog: Catalog = serde_json::from_slice(catalog)
         .map_err(|error| CatalogError::Invalid(error.to_string()))?;
     validate_catalog(&catalog)?;
     Ok(catalog)
-}
-
-fn parse_signature(signature: &[u8]) -> Result<Signature, CatalogError> {
-    let text = signature.strip_suffix(b"\n").unwrap_or(signature);
-    let text = std::str::from_utf8(text).map_err(|_| CatalogError::MalformedSignature)?;
-    let bytes = decode_lower_hex::<64>(text).ok_or(CatalogError::MalformedSignature)?;
-    Ok(Signature::from_bytes(&bytes))
-}
-
-fn decode_lower_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
-    if text.len() != N * 2
-        || !text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return None;
-    }
-    let mut bytes = [0; N];
-    hex::decode_to_slice(text, &mut bytes).ok()?;
-    Some(bytes)
 }
 
 /// Checks catalog invariants that serde cannot express.

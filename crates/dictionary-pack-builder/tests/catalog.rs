@@ -4,12 +4,12 @@ use std::path::Path;
 use std::process::Command;
 
 use elephant_ladder_dictionary_pack::{
-    CATALOG_FILE, CATALOG_SIGNATURE_FILE, CatalogError, CatalogPack, DictionaryPack,
-    PACK_MANIFEST_FILE, PackLimits, SigningKey, parse_verifying_key, verify_catalog,
+    CATALOG_FILE, CatalogError, CatalogPack, DictionaryPack, PACK_MANIFEST_FILE, PackLimits,
+    parse_catalog,
 };
 use elephant_ladder_dictionary_pack_builder::{
     BuildManifest, BuildOptions, CatalogConfig, CorpusConfig, Sha256Hex, assemble_catalog,
-    build_pack, generate_signing_key, release_manifest_name, sign_catalog,
+    build_pack, release_manifest_name,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -70,7 +70,7 @@ fn config() -> CatalogConfig {
     }
 }
 
-fn signed_release() -> (TempDir, SigningKey) {
+fn assembled_release() -> TempDir {
     let temporary = tempfile::tempdir().unwrap();
     build_pack_directory(temporary.path());
     assemble_catalog(
@@ -79,18 +79,14 @@ fn signed_release() -> (TempDir, SigningKey) {
         &temporary.path().join("release"),
     )
     .unwrap();
-    let key = generate_signing_key(&temporary.path().join("signing.key")).unwrap();
-    sign_catalog(&temporary.path().join("release"), &key).unwrap();
-    (temporary, key)
+    temporary
 }
 
 #[test]
-fn assembled_catalog_verifies_and_anchors_pack_admission() {
-    let (temporary, key) = signed_release();
+fn assembled_catalog_parses_and_anchors_pack_admission() {
+    let temporary = assembled_release();
     let release = temporary.path().join("release");
-    let catalog_bytes = fs::read(release.join(CATALOG_FILE)).unwrap();
-    let signature = fs::read(release.join(CATALOG_SIGNATURE_FILE)).unwrap();
-    let catalog = verify_catalog(&catalog_bytes, &signature, &[key.verifying_key()]).unwrap();
+    let catalog = parse_catalog(&fs::read(release.join(CATALOG_FILE)).unwrap()).unwrap();
 
     let [CatalogPack::Corpus(corpus)] = catalog.packs.as_slice() else {
         panic!("expected one corpus");
@@ -157,58 +153,20 @@ fn packs_published_by_an_earlier_release_are_referenced_not_copied() {
 }
 
 #[test]
-fn catalog_verification_rejects_tampering_untrusted_keys_and_bad_signatures() {
-    let (temporary, key) = signed_release();
-    let release = temporary.path().join("release");
-    let catalog_bytes = fs::read(release.join(CATALOG_FILE)).unwrap();
-    let signature = fs::read(release.join(CATALOG_SIGNATURE_FILE)).unwrap();
-    let trusted = [key.verifying_key()];
-
-    let mut tampered = catalog_bytes.clone();
-    let position = tampered.iter().position(|byte| *byte == b'1').unwrap();
-    tampered[position] = b'2';
+fn oversized_catalogs_are_rejected() {
     assert_eq!(
-        verify_catalog(&tampered, &signature, &trusted),
-        Err(CatalogError::UntrustedSignature)
-    );
-
-    let other = SigningKey::from_bytes(&[7; 32]);
-    assert_eq!(
-        verify_catalog(&catalog_bytes, &signature, &[other.verifying_key()]),
-        Err(CatalogError::UntrustedSignature)
-    );
-    assert_eq!(
-        verify_catalog(&catalog_bytes, &signature, &[]),
-        Err(CatalogError::UntrustedSignature)
-    );
-    for malformed in [
-        &signature[..10],
-        signature.to_ascii_uppercase().as_slice(),
-        b"",
-        &[signature.as_slice(), b"\n"].concat(),
-    ] {
-        assert_eq!(
-            verify_catalog(&catalog_bytes, malformed, &trusted),
-            Err(CatalogError::MalformedSignature)
-        );
-    }
-    assert_eq!(
-        verify_catalog(&vec![b' '; 4 * 1024 * 1024 + 1], &signature, &trusted),
+        parse_catalog(&vec![b' '; 4 * 1024 * 1024 + 1]),
         Err(CatalogError::TooLarge)
     );
 }
 
 #[test]
-fn signed_catalogs_must_still_satisfy_the_format() {
-    use ed25519_dalek::Signer;
-    use elephant_ladder_dictionary_pack::encode_signature;
-
-    let (temporary, _) = signed_release();
+fn parsed_catalogs_must_satisfy_the_format() {
+    let temporary = assembled_release();
     let catalog: Value = serde_json::from_slice(
         &fs::read(temporary.path().join("release").join(CATALOG_FILE)).unwrap(),
     )
     .unwrap();
-    let key = SigningKey::from_bytes(&[3; 32]);
     let mutations: [fn(&mut Value); 10] = [
         |catalog| catalog["unexpected"] = json!(true),
         |catalog| catalog["catalog_version"] = json!(2),
@@ -233,19 +191,15 @@ fn signed_catalogs_must_still_satisfy_the_format() {
         let mut mutated = catalog.clone();
         mutate(&mut mutated);
         let bytes = serde_json::to_vec(&mutated).unwrap();
-        let signature = encode_signature(&key.sign(&bytes));
         assert!(
-            matches!(
-                verify_catalog(&bytes, signature.as_bytes(), &[key.verifying_key()]),
-                Err(CatalogError::Invalid(_))
-            ),
+            matches!(parse_catalog(&bytes), Err(CatalogError::Invalid(_))),
             "accepted {mutated}"
         );
     }
 }
 
 #[test]
-fn catalog_cli_generates_keys_assembles_and_signs() {
+fn catalog_cli_assembles_a_release() {
     let temporary = tempfile::tempdir().unwrap();
     build_pack_directory(temporary.path());
     let config = json!({
@@ -259,66 +213,30 @@ fn catalog_cli_generates_keys_assembles_and_signs() {
         serde_json::to_vec(&config).unwrap(),
     )
     .unwrap();
-    let tool = env!("CARGO_BIN_EXE_elephant-dictionary-pack");
-    let run = |arguments: &[&str]| {
-        let output = Command::new(tool)
-            .current_dir(temporary.path())
-            .args(arguments)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap()
-    };
-
-    let keygen = run(&["catalog", "keygen", "--output", "signing.key"]);
-    let public_key = keygen
-        .trim()
-        .strip_prefix("public_key=")
-        .unwrap()
-        .to_owned();
-    run(&[
-        "catalog",
-        "assemble",
-        "--config",
-        "catalog.json",
-        "--output",
-        "release",
-    ]);
-    let signed = run(&[
-        "catalog",
-        "sign",
-        "--release",
-        "release",
-        "--key",
-        "signing.key",
-    ]);
-    assert_eq!(signed.trim(), format!("public_key={public_key}"));
-
-    let release = temporary.path().join("release");
-    verify_catalog(
-        &fs::read(release.join(CATALOG_FILE)).unwrap(),
-        &fs::read(release.join(CATALOG_SIGNATURE_FILE)).unwrap(),
-        &[parse_verifying_key(&public_key).unwrap()],
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(temporary.path().join("signing.key"))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o077, 0);
-    }
-    let again = Command::new(tool)
+    let output = Command::new(env!("CARGO_BIN_EXE_elephant-dictionary-pack"))
         .current_dir(temporary.path())
-        .args(["catalog", "keygen", "--output", "signing.key"])
+        .args([
+            "catalog",
+            "assemble",
+            "--config",
+            "catalog.json",
+            "--output",
+            "release",
+        ])
         .output()
         .unwrap();
-    assert!(!again.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "catalog_revision=cli-1\npacks=1\n"
+    );
+
+    let catalog =
+        parse_catalog(&fs::read(temporary.path().join("release").join(CATALOG_FILE)).unwrap())
+            .unwrap();
+    assert_eq!(catalog.catalog_revision, "cli-1");
 }

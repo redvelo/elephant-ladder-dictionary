@@ -434,8 +434,9 @@ fn acquisition_build_and_runtime_cover_every_recording_status() {
 }
 
 /// A remote collection built from an acquisition whose originals were never downloaded.
-fn remote_collection(temporary: &Path) -> (AudioBuildResult, PathBuf) {
-    let corpus = build_corpus(&temporary.join("corpus"));
+/// A new acquisition of the fixture corpus against a fake Commons.
+fn fresh_acquisition(root: &Path) -> (AcquisitionState, AcquireOptions, FakeCommons) {
+    let corpus = build_corpus(&root.join("corpus"));
     let references = corpus.audio_references().unwrap();
     let reference_set = ReferenceSet {
         schema_version: 1,
@@ -452,10 +453,17 @@ fn remote_collection(temporary: &Path) -> (AudioBuildResult, PathBuf) {
         backoff: Duration::from_millis(1),
         ..AcquireOptions::commons("https://example.invalid/test")
     };
-    let state_directory = temporary.join("acquisition");
-    let state =
-        AcquisitionState::open_or_create(&state_directory, &reference_set, "2026-09-16T00:00:00Z")
-            .unwrap();
+    let state = AcquisitionState::open_or_create(
+        &root.join("acquisition"),
+        &reference_set,
+        "2026-09-16T00:00:00Z",
+    )
+    .unwrap();
+    (state, options, commons)
+}
+
+fn remote_collection(temporary: &Path) -> (AudioBuildResult, PathBuf) {
+    let (state, options, _commons) = fresh_acquisition(temporary);
     assert!(acquire(&state, &options).unwrap().completed);
 
     // A remote collection needs resolved facts only, so downloads that have not happened
@@ -485,6 +493,28 @@ fn remote_collection(temporary: &Path) -> (AudioBuildResult, PathBuf) {
     )
     .unwrap();
     (result, directory)
+}
+
+#[test]
+fn each_shard_completes_when_its_own_files_settle() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (state, options, _commons) = fresh_acquisition(temporary.path());
+    let shard = |ordinal| AcquireOptions {
+        shard: Some((ordinal, 2)),
+        ..options.clone()
+    };
+
+    let first = acquire(&state, &shard(1)).unwrap();
+    assert!(first.completed, "{:?}", first.phases);
+    // The other shard's files are still waiting in this database.
+    assert!(first.phases.contains_key("pending"), "{:?}", first.phases);
+    let second = acquire(&state, &shard(2)).unwrap();
+    assert!(second.completed, "{:?}", second.phases);
+    assert!(
+        !second.phases.contains_key("pending"),
+        "{:?}",
+        second.phases
+    );
 }
 
 #[test]

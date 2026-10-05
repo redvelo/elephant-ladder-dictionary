@@ -25,7 +25,7 @@ pub use audio_state::{
 pub use builder::{BuildError, BuildOptions, BuildResult, build_pack};
 pub use catalog::{
     AudioConfig, CatalogBuildError, CatalogConfig, CorpusConfig, assemble_catalog,
-    generate_signing_key, read_signing_key, release_manifest_name, sign_catalog,
+    release_manifest_name,
 };
 pub use manifest::{AssetManifest, BuildManifest, PackAsset, PackManifest, Sha256Hex};
 pub use report::{

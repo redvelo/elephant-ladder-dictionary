@@ -3,10 +3,10 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use elephant_ladder_dictionary_pack::{
-    AUDIO_MANIFEST_FILE, AudioCollection, AudioManifest, AudioPack, CATALOG_FILE,
-    CATALOG_SIGNATURE_FILE, Catalog, CatalogAsset, CatalogError, CatalogPack, CorpusPack,
-    DictionaryPack, ExpectedPack, PACK_MANIFEST_FILE, PackAsset, PackError, PackLimits,
-    PackRelease, PackRevision, Sha256Hex, SigningKey, encode_signature, validate_catalog,
+    AUDIO_MANIFEST_FILE, AudioCollection, AudioManifest, AudioPack, CATALOG_FILE, Catalog,
+    CatalogAsset, CatalogError, CatalogPack, CorpusPack, DictionaryPack, ExpectedPack,
+    PACK_MANIFEST_FILE, PackAsset, PackError, PackLimits, PackRelease, PackRevision, Sha256Hex,
+    validate_catalog,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -254,69 +254,6 @@ fn publish(publication: &Publication<'_>) -> Result<Vec<CatalogAsset>, CatalogBu
         });
     }
     Ok(assets)
-}
-
-/// Signs exact catalog bytes and writes the detached signature beside the catalog.
-///
-/// # Errors
-///
-/// Returns an error when the catalog cannot be read or is invalid, or the signature
-/// file already exists.
-pub fn sign_catalog(
-    release_directory: &Path,
-    signing_key: &SigningKey,
-) -> Result<(), CatalogBuildError> {
-    use ed25519_dalek::Signer;
-    use elephant_ladder_dictionary_pack::verify_catalog;
-
-    let catalog_path = release_directory.join(CATALOG_FILE);
-    let catalog =
-        fs::read(&catalog_path).map_err(|source| io_error("read", &catalog_path, source))?;
-    let signature = encode_signature(&signing_key.sign(&catalog));
-    verify_catalog(
-        &catalog,
-        signature.as_bytes(),
-        &[signing_key.verifying_key()],
-    )?;
-    write_new(
-        &release_directory.join(CATALOG_SIGNATURE_FILE),
-        signature.as_bytes(),
-        0o644,
-    )
-}
-
-/// Reads a signing key stored as 64 lowercase hexadecimal characters.
-///
-/// # Errors
-///
-/// Returns an error when the file cannot be read or is malformed.
-pub fn read_signing_key(path: &Path) -> Result<SigningKey, CatalogBuildError> {
-    let text = fs::read_to_string(path).map_err(|source| io_error("read", path, source))?;
-    let text = text.strip_suffix('\n').unwrap_or(&text);
-    let mut seed = [0_u8; 32];
-    let lowercase = text
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-    if text.len() != 64 || !lowercase || hex::decode_to_slice(text, &mut seed).is_err() {
-        return Err(CatalogBuildError::Invalid(
-            "signing key must be 64 lowercase hexadecimal characters".to_owned(),
-        ));
-    }
-    Ok(SigningKey::from_bytes(&seed))
-}
-
-/// Generates a signing key into a new owner-only file.
-///
-/// # Errors
-///
-/// Returns an error when randomness is unavailable or the file exists.
-pub fn generate_signing_key(path: &Path) -> Result<SigningKey, CatalogBuildError> {
-    let mut seed = [0_u8; 32];
-    getrandom::fill(&mut seed)
-        .map_err(|error| CatalogBuildError::Invalid(format!("randomness unavailable: {error}")))?;
-    let key = SigningKey::from_bytes(&seed);
-    write_new(path, format!("{}\n", hex::encode(seed)).as_bytes(), 0o600)?;
-    Ok(key)
 }
 
 fn license_identifiers(license_manifest_json: &str) -> Result<Vec<String>, CatalogBuildError> {

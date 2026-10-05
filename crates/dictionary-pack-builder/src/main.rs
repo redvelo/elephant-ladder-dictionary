@@ -15,8 +15,8 @@ use elephant_ladder_dictionary_pack::{
 };
 use elephant_ladder_dictionary_pack_builder::{
     AcquireOptions, AcquisitionState, BuildManifest, BuildOptions, CatalogConfig, EditionConfig,
-    ReferenceSet, SourceSnapshot, acquire, assemble_catalog, build_manifest, build_pack,
-    generate_signing_key, read_signing_key, sign_catalog, utc_now, validate_snapshot,
+    ReferenceSet, SourceSnapshot, acquire, assemble_catalog, build_manifest, build_pack, utc_now,
+    validate_snapshot,
 };
 use elephant_ladder_dictionary_pack_builder::{AudioBuildOptions, build_audio_collection};
 #[cfg(feature = "transcode")]
@@ -392,11 +392,6 @@ fn run_catalog(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), 
         .map(|argument| argument.to_str().ok_or_else(|| usage(program)))
         .collect::<Result<Vec<_>, _>>()?;
     match arguments.as_slice() {
-        ["keygen", "--output", path] => {
-            let key = generate_signing_key(Path::new(path)).map_err(|error| error.to_string())?;
-            println!("public_key={}", hex::encode(key.verifying_key().to_bytes()));
-            Ok(())
-        }
         ["assemble", "--config", config, "--output", output] => {
             let config_path = Path::new(config);
             let file = File::open(config_path)
@@ -411,12 +406,6 @@ fn run_catalog(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), 
             .map_err(|error| error.to_string())?;
             println!("catalog_revision={}", catalog.catalog_revision);
             println!("packs={}", catalog.packs.len());
-            Ok(())
-        }
-        ["sign", "--release", release, "--key", key] => {
-            let key = read_signing_key(Path::new(key)).map_err(|error| error.to_string())?;
-            sign_catalog(Path::new(release), &key).map_err(|error| error.to_string())?;
-            println!("public_key={}", hex::encode(key.verifying_key().to_bytes()));
             Ok(())
         }
         _ => Err(usage(program)),
@@ -459,7 +448,7 @@ fn run_audio_build(
 
 fn usage(program: &std::ffi::OsStr) -> String {
     format!(
-        "usage: {program} format-version\n       {program} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --contact URL_OR_EMAIL [--shard ORDINAL/TOTAL]\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY [--index-only]\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} source manifest --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION\n       {program} catalog keygen --output SIGNING_KEY\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n       {program} catalog sign --release RELEASE_DIRECTORY --key SIGNING_KEY\n\n`--input -` reads decompressed JSONL from standard input.",
+        "usage: {program} format-version\n       {program} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --contact URL_OR_EMAIL [--shard ORDINAL/TOTAL]\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY [--index-only]\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} source manifest --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n\n`--input -` reads decompressed JSONL from standard input.",
         program = program.to_string_lossy(),
     )
 }

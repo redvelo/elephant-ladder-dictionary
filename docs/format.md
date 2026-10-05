@@ -85,13 +85,12 @@ all senses, so a view can distinguish "no entry" from "no translation."
 
 ## Catalog
 
-A release publishes `catalog-v1.json` and `catalog-v1.json.sig`.
+`catalog-v1.json` is committed to this repository and read from its default branch
+over HTTPS. It is the trust anchor for everything it names: each asset is accepted
+only on its declared SHA-256.
 
-- The signature is a lowercase hexadecimal Ed25519 signature over the exact catalog
-  bytes, optionally followed by one LF.
-- `verify_catalog` checks size, signature against trusted keys, then parses with
-  unknown-field rejection and validates identities, asset names, sizes, URLs, views,
-  and licenses.
+- `parse_catalog` checks size, then parses with unknown-field rejection and validates
+  identities, asset names, sizes, URLs, views, and licenses.
 - Each pack lists every installed file, including `pack-manifest-v1.json`, with its
   release URL. Manifests are published as `<pack-id>-<revision>-pack-manifest-v1.json`
   so release asset names stay unique.
@@ -99,8 +98,7 @@ A release publishes `catalog-v1.json` and `catalog-v1.json.sig`.
   `open_installed` for corpus packs and audio collections.
 
 `elephant-dictionary-pack catalog assemble` verifies built packs and writes a release
-directory; `catalog sign` signs it; `catalog keygen` creates an owner-only signing
-key.
+directory.
 
 Catalog assembly currently covers corpus packs. Audio collections have a catalog
 representation but no assembly path, so they cannot yet be published in a release.

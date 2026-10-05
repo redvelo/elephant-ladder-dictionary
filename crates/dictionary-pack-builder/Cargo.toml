@@ -21,8 +21,6 @@ transcode = ["dep:ogg", "dep:opus", "dep:rubato", "dep:symphonia"]
 
 [dependencies]
 elephant-ladder-dictionary-pack = { path = "../dictionary-pack" }
-ed25519-dalek.workspace = true
-getrandom.workspace = true
 hex.workspace = true
 ogg = { workspace = true, optional = true }
 opus = { workspace = true, optional = true }

@@ -18,11 +18,9 @@ pub use audio::{
     frame_recording_facts, opus_duration_ms, recording_input_digest,
 };
 pub use catalog::{
-    AudioPack, CATALOG_FILE, CATALOG_SIGNATURE_FILE, Catalog, CatalogAsset, CatalogError,
-    CatalogPack, CorpusPack, MAX_CATALOG_BYTES, PackRelease, RecordingCounts, encode_signature,
-    parse_verifying_key, validate_catalog, verify_catalog,
+    AudioPack, CATALOG_FILE, Catalog, CatalogAsset, CatalogError, CatalogPack, CorpusPack,
+    MAX_CATALOG_BYTES, PackRelease, RecordingCounts, parse_catalog, validate_catalog,
 };
-pub use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 pub use error::PackError;
 pub use format::{
     AUDIO_CHUNK_APPLICATION_ID, AUDIO_CHUNK_SCHEMA, AUDIO_ENCODER_PROFILE,

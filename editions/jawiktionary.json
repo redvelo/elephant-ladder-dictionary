@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "wiktionary_edition": "jawiktionary",
+  "corpus_language": "ja",
+  "pack_id": "wiktionary-ja-ja",
+  "origin": {
+    "source_url": "https://kaikki.org/jawiktionary/raw-wiktextract-data.jsonl.gz",
+    "info_url": "https://kaikki.org/jawiktionary/rawdata.html"
+  },
+  "target_shard_payload_bytes": 536870912,
+  "minimum_app_version": "0.1.0",
+  "license_manifest": {
+    "schema_version": 1,
+    "source": "Japanese Wiktionary via the raw Kaikki.org Wiktextract extraction",
+    "notice": "Dictionary content remains third-party material; the Elephant Ladder Dictionary code license does not apply to it.",
+    "attribution_urls": [
+      "https://ja.wiktionary.org/",
+      "https://ja.wiktionary.org/wiki/Wiktionary:著作権",
+      "https://kaikki.org/jawiktionary/"
+    ],
+    "licenses": [
+      {
+        "spdx": "CC-BY-SA-4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0/"
+      },
+      {
+        "spdx": "GFDL-1.3-only",
+        "url": "https://www.gnu.org/licenses/fdl-1.3.html"
+      }
+    ]
+  },
+  "audio": {
+    "pack_id": "wiktionary-ja-audio",
+    "chunk_count": 1
+  }
+}

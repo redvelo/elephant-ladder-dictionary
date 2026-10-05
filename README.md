@@ -43,14 +43,26 @@ relative to a manifest obtained through a trusted channel, such as a signed cata
 ## Release Catalog
 
 ```sh
-elephant-dictionary-pack catalog keygen --output SIGNING_KEY
+scripts/publish_catalog.py CATALOG_CONFIG.json
+```
+
+That assembles the release, checks every asset against the catalog, uploads the assets
+under the tag the base URL names, and commits the catalog here, leaving only `git push`.
+The assembly step alone is:
+
+```sh
 elephant-dictionary-pack catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY
-elephant-dictionary-pack catalog sign --release RELEASE_DIRECTORY --key SIGNING_KEY
 ```
 
 `CATALOG_CONFIG.json` names the catalog revision, generation time, release base URL,
-and each built pack directory with its qualified views. See the
-[format documentation](docs/format.md).
+and each built pack directory with its qualified views. A pack published by an earlier
+release keeps its own `release_base_url` so its assets are referenced rather than
+uploaded again. See the [format documentation](docs/format.md).
+
+Pack assets are published as a release under the tag the base URL names. The catalog
+is committed to this repository instead, and the application reads it from the default
+branch over HTTPS. Assets need no trust of their own: the catalog declares each one's
+SHA-256, and the application installs nothing that does not match.
 
 ## Development
 
