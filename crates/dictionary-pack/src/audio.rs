@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -8,17 +7,21 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::pack::{
-    Admission, bytes32, lock, nonnegative, open_database, positive, read_bounded, safe_asset_name,
-    validate_asset_bytes, validate_asset_size,
+    Admission, MAX_ASSET_BYTES, MAX_ASSETS, MAX_MANIFEST_BYTES, bytes32, lock, open_database,
+    read_bounded, safe_asset_name, validate_asset_bytes, validate_asset_size,
 };
 use crate::{
     AUDIO_CHUNK_APPLICATION_ID, AUDIO_CHUNK_SCHEMA, AUDIO_ENCODER_PROFILE,
-    AUDIO_INDEX_APPLICATION_ID, AUDIO_INDEX_SCHEMA, AudioRevisionInputs, ExpectedPack,
-    FORMAT_VERSION, PackAsset, PackError, PackId, PackLimits, PackRevision, Sha256Hex,
+    AUDIO_INDEX_APPLICATION_ID, AUDIO_INDEX_SCHEMA, ExpectedPack, FORMAT_VERSION, FramedDigest,
+    PackAsset, PackError, PackId, PackRevision, RecordingCounts, commons_description_url,
+    commons_title,
 };
 
 /// The fixed name of the format-v1 audio collection manifest.
 pub const AUDIO_MANIFEST_FILE: &str = "audio-manifest-v1.json";
+/// The largest encoded recording a collection serves.
+const MAX_RECORDING_BYTES: u64 = 1024 * 1024;
+const AUDIO_REVISION_DOMAIN: &[u8] = b"ELDICT-AUDIO-REVISION-V1";
 const RECORDING_INPUT_DOMAIN: &[u8] = b"ELDICT-AUDIO-RECORDING-INPUTS-V1";
 
 /// Deterministic release manifest emitted beside the audio `SQLite` assets.
@@ -27,15 +30,15 @@ const RECORDING_INPUT_DOMAIN: &[u8] = b"ELDICT-AUDIO-RECORDING-INPUTS-V1";
 pub struct AudioManifest {
     pub manifest_version: u32,
     pub format_version: u32,
-    pub pack_id: String,
-    pub pack_revision: Sha256Hex,
+    pub pack_id: PackId,
+    pub pack_revision: PackRevision,
     pub assets: Vec<PackAsset>,
 }
 
 /// The canonical index asset name of an audio collection revision.
 #[must_use]
 pub fn audio_index_file_name(pack_id: &PackId, revision: &PackRevision) -> String {
-    format!("{}-{}-index.eldict", pack_id.as_str(), revision.to_hex())
+    format!("{pack_id}-{revision}-index.eldict")
 }
 
 /// The canonical, content-addressed name of an audio chunk asset. Identical chunks
@@ -43,8 +46,7 @@ pub fn audio_index_file_name(pack_id: &PackId, revision: &PackRevision) -> Strin
 #[must_use]
 pub fn audio_chunk_file_name(pack_id: &PackId, ordinal: u64, sha256: &[u8; 32]) -> String {
     format!(
-        "{}-chunk-{ordinal:03}-{}.eldict",
-        pack_id.as_str(),
+        "{pack_id}-chunk-{ordinal:03}-{}.eldict",
         hex::encode(&sha256[..8])
     )
 }
@@ -78,6 +80,15 @@ impl AudioDelivery {
         match self {
             Self::Bundled => "bundled",
             Self::Remote => "remote",
+        }
+    }
+
+    /// The encoding of every recording a collection with this delivery ships.
+    #[must_use]
+    pub const fn encoder_profile(self) -> &'static str {
+        match self {
+            Self::Bundled => AUDIO_ENCODER_PROFILE,
+            Self::Remote => "",
         }
     }
 
@@ -144,6 +155,53 @@ pub struct RecordingFacts {
     pub attribution_required: Option<bool>,
 }
 
+impl RecordingFacts {
+    /// Frames these facts into a collection's recording input digest.
+    pub fn frame(&self, digest: &mut FramedDigest) {
+        digest.field(self.file_name.as_bytes());
+        digest.field(&[self.status as u8]);
+        digest.optional(self.reason.as_deref().map(str::as_bytes));
+        digest.field(&self.reference_count.to_be_bytes());
+        digest.optional(self.source_title.as_deref().map(str::as_bytes));
+        digest.optional(self.source_sha1.as_ref().map(<[u8; 20]>::as_slice));
+        digest.optional(self.source_timestamp.as_deref().map(str::as_bytes));
+        digest.optional(self.source_media_type.as_deref().map(str::as_bytes));
+        digest.optional(
+            self.source_size_bytes
+                .map(u64::to_be_bytes)
+                .as_ref()
+                .map(<[u8; 8]>::as_slice),
+        );
+        digest.optional(self.description_url.as_deref().map(str::as_bytes));
+        match &self.license {
+            Some(license) => {
+                digest.optional(Some(license.short_name.as_bytes()));
+                digest.optional(license.identifier.as_deref().map(str::as_bytes));
+                digest.optional(license.url.as_deref().map(str::as_bytes));
+            }
+            None => digest.optional(None),
+        }
+        digest.optional(self.author_text.as_deref().map(str::as_bytes));
+        digest.field(&(self.author_urls.len() as u64).to_be_bytes());
+        for url in &self.author_urls {
+            digest.field(url.as_bytes());
+        }
+        digest.optional(
+            self.attribution_required
+                .map(|required| [u8::from(required)])
+                .as_ref()
+                .map(<[u8; 1]>::as_slice),
+        );
+    }
+}
+
+/// A new recording input digest, which every recording's facts are framed into in
+/// file name order.
+#[must_use]
+pub fn recording_input_digest() -> FramedDigest {
+    FramedDigest::new(RECORDING_INPUT_DOMAIN)
+}
+
 /// The encoded audio of an available recording.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecordingAudio {
@@ -159,91 +217,43 @@ pub struct Recording {
     pub audio: Option<RecordingAudio>,
 }
 
-/// Frames one recording's acquired facts into a collection input digest.
-pub fn frame_recording_facts(digest: &mut Sha256, facts: &RecordingFacts) {
-    fn field(digest: &mut Sha256, bytes: &[u8]) {
-        digest.update((bytes.len() as u64).to_be_bytes());
-        digest.update(bytes);
-    }
-    fn optional(digest: &mut Sha256, value: Option<&[u8]>) {
-        match value {
-            Some(bytes) => {
-                digest.update([1]);
-                field(digest, bytes);
-            }
-            None => digest.update([0]),
-        }
-    }
-    field(digest, facts.file_name.as_bytes());
-    field(digest, &[facts.status as u8]);
-    optional(digest, facts.reason.as_deref().map(str::as_bytes));
-    field(digest, &facts.reference_count.to_be_bytes());
-    optional(digest, facts.source_title.as_deref().map(str::as_bytes));
-    optional(digest, facts.source_sha1.as_ref().map(<[u8; 20]>::as_slice));
-    optional(digest, facts.source_timestamp.as_deref().map(str::as_bytes));
-    optional(
-        digest,
-        facts.source_media_type.as_deref().map(str::as_bytes),
-    );
-    optional(
-        digest,
-        facts
-            .source_size_bytes
-            .map(u64::to_be_bytes)
-            .as_ref()
-            .map(<[u8; 8]>::as_slice),
-    );
-    optional(digest, facts.description_url.as_deref().map(str::as_bytes));
-    match &facts.license {
-        Some(license) => {
-            digest.update([1]);
-            field(digest, license.short_name.as_bytes());
-            optional(digest, license.identifier.as_deref().map(str::as_bytes));
-            optional(digest, license.url.as_deref().map(str::as_bytes));
-        }
-        None => digest.update([0]),
-    }
-    optional(digest, facts.author_text.as_deref().map(str::as_bytes));
-    field(digest, &(facts.author_urls.len() as u64).to_be_bytes());
-    for url in &facts.author_urls {
-        field(digest, url.as_bytes());
-    }
-    optional(
-        digest,
-        facts
-            .attribution_required
-            .map(|required| [u8::from(required)])
-            .as_ref()
-            .map(<[u8; 1]>::as_slice),
-    );
-}
-
-/// A new recording input digest.
-#[must_use]
-pub fn recording_input_digest() -> Sha256 {
-    let mut digest = Sha256::new();
-    digest.update((RECORDING_INPUT_DOMAIN.len() as u64).to_be_bytes());
-    digest.update(RECORDING_INPUT_DOMAIN);
-    digest
-}
-
-/// Authenticated identity facts from an audio collection index.
+/// The pinned inputs and totals of one audio collection revision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AudioMetadata {
-    pub pack_id: String,
-    pub revision: [u8; 32],
+    pub pack_id: PackId,
     pub corpus_language: String,
-    pub source_corpus_pack_id: String,
-    pub source_corpus_revision: [u8; 32],
+    pub source_corpus_pack_id: PackId,
+    pub source_corpus_revision: PackRevision,
     pub acquired_at: String,
-    pub encoder_profile: String,
     pub builder_revision: String,
     pub delivery: AudioDelivery,
     pub chunk_count: u64,
     pub recording_count: u64,
     pub available_count: u64,
+    /// Digest of every recording's acquired facts, in file name order.
     pub recording_input_digest: [u8; 32],
     pub minimum_app_version: String,
+}
+
+impl AudioMetadata {
+    /// Derives the collection revision from every input that affects its bytes.
+    #[must_use]
+    pub fn revision(&self) -> PackRevision {
+        let mut digest = FramedDigest::new(AUDIO_REVISION_DOMAIN);
+        digest.field(&FORMAT_VERSION.to_be_bytes());
+        digest.field(self.pack_id.as_str().as_bytes());
+        digest.field(self.corpus_language.as_bytes());
+        digest.field(self.source_corpus_pack_id.as_str().as_bytes());
+        digest.field(self.source_corpus_revision.as_bytes());
+        digest.field(self.acquired_at.as_bytes());
+        digest.field(self.delivery.encoder_profile().as_bytes());
+        digest.field(self.builder_revision.as_bytes());
+        digest.field(self.delivery.as_str().as_bytes());
+        digest.field(&self.chunk_count.to_be_bytes());
+        digest.field(&self.recording_input_digest);
+        digest.field(self.minimum_app_version.as_bytes());
+        PackRevision::from_bytes(digest.finish())
+    }
 }
 
 #[derive(Clone)]
@@ -272,10 +282,9 @@ pub struct AudioValidationReport {
 
 /// An admitted immutable audio collection.
 pub struct AudioCollection {
-    directory: PathBuf,
+    revision: PackRevision,
     metadata: AudioMetadata,
     manifest: AudioManifest,
-    limits: PackLimits,
     index: Mutex<Connection>,
     chunks: Vec<Chunk>,
 }
@@ -287,12 +296,8 @@ impl AudioCollection {
     ///
     /// Returns an error for any manifest, asset, database, identity, or relational
     /// inconsistency.
-    pub fn verify(
-        directory: impl AsRef<Path>,
-        expected: &ExpectedPack,
-        limits: PackLimits,
-    ) -> Result<Self, PackError> {
-        Self::admit(directory.as_ref(), expected, Admission::Full, limits)
+    pub fn verify(directory: impl AsRef<Path>, expected: &ExpectedPack) -> Result<Self, PackError> {
+        Self::admit(directory.as_ref(), expected, Admission::Full)
     }
 
     /// Opens a collection previously admitted by [`Self::verify`] without hashing
@@ -305,26 +310,23 @@ impl AudioCollection {
     pub fn open_installed(
         directory: impl AsRef<Path>,
         expected: &ExpectedPack,
-        limits: PackLimits,
     ) -> Result<Self, PackError> {
-        Self::admit(directory.as_ref(), expected, Admission::Installed, limits)
+        Self::admit(directory.as_ref(), expected, Admission::Installed)
     }
 
     fn admit(
         directory: &Path,
         expected: &ExpectedPack,
         admission: Admission,
-        limits: PackLimits,
     ) -> Result<Self, PackError> {
-        let limits = limits.validate()?;
-        let (manifest, pack_id, revision) = read_audio_manifest(directory, expected, limits)?;
-
-        let index_name = audio_index_file_name(&pack_id, &revision);
+        let manifest = read_audio_manifest(directory, expected)?;
+        let revision = manifest.pack_revision;
+        let index_name = audio_index_file_name(&manifest.pack_id, &revision);
         let mut index_path = None;
         let mut chunk_assets = BTreeMap::new();
         for asset in &manifest.assets {
             safe_asset_name(&asset.file_name)?;
-            if asset.size_bytes == 0 || asset.size_bytes > limits.max_asset_bytes {
+            if asset.size_bytes == 0 || asset.size_bytes > MAX_ASSET_BYTES {
                 return Err(PackError::Limit(format!(
                     "asset `{}` has an invalid declared size",
                     asset.file_name
@@ -370,12 +372,14 @@ impl AudioCollection {
             admission,
         )?;
         let metadata = read_metadata(&index)?;
-        check_audio_identity(&pack_id, &revision, &metadata)?;
+        if metadata.pack_id != manifest.pack_id || metadata.revision() != revision {
+            return Err(PackError::Corrupt(
+                "audio manifest and index metadata disagree".to_owned(),
+            ));
+        }
 
         let routes = read_chunk_routes(&index)?;
-        if u64::try_from(routes.len()).ok() != Some(metadata.chunk_count)
-            || routes.len() != chunk_assets.len()
-        {
+        if routes.len() as u64 != metadata.chunk_count || routes.len() != chunk_assets.len() {
             return Err(PackError::Corrupt(
                 "audio chunk routes do not match the manifest".to_owned(),
             ));
@@ -383,8 +387,8 @@ impl AudioCollection {
         let mut chunks = Vec::with_capacity(routes.len());
         for (position, route) in routes.into_iter().enumerate() {
             chunks.push(open_chunk(
-                &pack_id,
-                position,
+                &manifest.pack_id,
+                position as u64,
                 route,
                 &mut chunk_assets,
                 admission,
@@ -394,18 +398,17 @@ impl AudioCollection {
             validate_recording_relations(&index, &metadata)?;
         }
         Ok(Self {
-            directory: directory.to_owned(),
+            revision,
             metadata,
             manifest,
-            limits,
             index: Mutex::new(index),
             chunks,
         })
     }
 
     #[must_use]
-    pub fn directory(&self) -> &Path {
-        &self.directory
+    pub const fn pack_revision(&self) -> &PackRevision {
+        &self.revision
     }
 
     #[must_use]
@@ -437,21 +440,15 @@ impl AudioCollection {
     /// # Errors
     ///
     /// Returns storage errors.
-    pub fn recording_counts(&self) -> Result<crate::RecordingCounts, PackError> {
+    pub fn recording_counts(&self) -> Result<RecordingCounts, PackError> {
         let index = lock(&self.index)?;
         let mut statement =
             index.prepare("SELECT status, count(*) FROM recordings GROUP BY status")?;
-        let mut counts = crate::RecordingCounts {
-            available: 0,
-            unqualified: 0,
-            missing: 0,
-            failed: 0,
-        };
+        let mut counts = RecordingCounts::default();
         for row in
-            statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+            statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, u64>(1)?)))?
         {
             let (status, count) = row?;
-            let count = nonnegative("recording count", count)?;
             match RecordingStatus::from_code(status)? {
                 RecordingStatus::Available => counts.available = count,
                 RecordingStatus::Unqualified => counts.unqualified = count,
@@ -464,7 +461,7 @@ impl AudioCollection {
 
     /// Reads the encoded audio of an available recording, verified against its digest.
     ///
-    /// Returns `None` when the recording is not referenced or not available.
+    /// Returns `None` when the recording is not referenced or carries no audio.
     ///
     /// # Errors
     ///
@@ -479,14 +476,8 @@ impl AudioCollection {
         self.read_blob(&audio).map(Some)
     }
 
-    /// Whether a recording of this status carries audio bytes in this collection.
-    const fn bundles(&self, status: RecordingStatus) -> bool {
-        matches!(self.metadata.delivery, AudioDelivery::Bundled)
-            && matches!(status, RecordingStatus::Available)
-    }
-
     fn read_blob(&self, audio: &RecordingAudio) -> Result<Vec<u8>, PackError> {
-        if audio.size_bytes > self.limits.max_recording_bytes {
+        if audio.size_bytes > MAX_RECORDING_BYTES {
             return Err(PackError::Limit(
                 "recording exceeds the audio byte limit".to_owned(),
             ));
@@ -531,11 +522,13 @@ impl AudioCollection {
         let mut blobs = BTreeMap::new();
         for raw in raws {
             let recording = recording_from_raw(&index, raw)?;
-            frame_recording_facts(&mut digest, &recording.facts);
+            recording.facts.frame(&mut digest);
             if recording.facts.status == RecordingStatus::Available {
                 available += 1;
             }
-            if recording.audio.is_some() != self.bundles(recording.facts.status) {
+            let bundled = self.metadata.delivery == AudioDelivery::Bundled
+                && recording.facts.status == RecordingStatus::Available;
+            if recording.audio.is_some() != bundled {
                 return Err(PackError::Corrupt(format!(
                     "recording `{}` disagrees with {} delivery",
                     recording.facts.file_name,
@@ -552,8 +545,7 @@ impl AudioCollection {
                     )));
                 }
                 let bytes = self.read_blob(&audio)?;
-                let duration = opus_duration_ms(&bytes)?;
-                if duration != audio.duration_ms {
+                if opus_duration_ms(&bytes)? != audio.duration_ms {
                     return Err(PackError::Corrupt(format!(
                         "recording `{}` duration disagrees with its stream",
                         recording.facts.file_name
@@ -562,8 +554,7 @@ impl AudioCollection {
                 blobs.insert((audio.chunk_ordinal, audio.sha256), audio.size_bytes);
             }
         }
-        let digest: [u8; 32] = digest.finalize().into();
-        if digest != self.metadata.recording_input_digest
+        if digest.finish() != self.metadata.recording_input_digest
             || available != self.metadata.available_count
         {
             return Err(PackError::Corrupt(
@@ -680,54 +671,52 @@ const RECORDING_COLUMNS: &str = "SELECT file_name, status, reason, reference_cou
      opus_size_bytes, duration_ms, chunk_ordinal \
      FROM recordings LEFT JOIN authors USING (author_ordinal)";
 
-type RawRecording = (
-    String,
-    i64,
-    Option<String>,
-    i64,
-    Option<String>,
-    Option<Vec<u8>>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-    Option<String>,
-    Option<i64>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-    Option<Vec<u8>>,
-    Option<i64>,
-    Option<i64>,
-    Option<i64>,
-);
+struct RawRecording {
+    file_name: String,
+    status: i64,
+    reason: Option<String>,
+    reference_count: u64,
+    source_title: Option<String>,
+    source_sha1: Option<Vec<u8>>,
+    source_timestamp: Option<String>,
+    source_media_type: Option<String>,
+    source_size_bytes: Option<u64>,
+    description_url: Option<String>,
+    license_ordinal: Option<i64>,
+    author_text: Option<String>,
+    author_urls_json: Option<String>,
+    attribution_required: Option<i64>,
+    opus_sha256: Option<Vec<u8>>,
+    opus_size_bytes: Option<u64>,
+    duration_ms: Option<u64>,
+    chunk_ordinal: Option<u64>,
+}
 
 fn raw_recording(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawRecording> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-        row.get(7)?,
-        row.get(8)?,
-        row.get(9)?,
-        row.get(10)?,
-        row.get(11)?,
-        row.get(12)?,
-        row.get(13)?,
-        row.get(14)?,
-        row.get(15)?,
-        row.get(16)?,
-        row.get(17)?,
-    ))
+    Ok(RawRecording {
+        file_name: row.get(0)?,
+        status: row.get(1)?,
+        reason: row.get(2)?,
+        reference_count: row.get(3)?,
+        source_title: row.get(4)?,
+        source_sha1: row.get(5)?,
+        source_timestamp: row.get(6)?,
+        source_media_type: row.get(7)?,
+        source_size_bytes: row.get(8)?,
+        description_url: row.get(9)?,
+        license_ordinal: row.get(10)?,
+        author_text: row.get(11)?,
+        author_urls_json: row.get(12)?,
+        attribution_required: row.get(13)?,
+        opus_sha256: row.get(14)?,
+        opus_size_bytes: row.get(15)?,
+        duration_ms: row.get(16)?,
+        chunk_ordinal: row.get(17)?,
+    })
 }
 
 fn recording_from_raw(index: &Connection, raw: RawRecording) -> Result<Recording, PackError> {
-    use crate::semantic::commons_title;
-
-    let license = match raw.10 {
+    let license = match raw.license_ordinal {
         Some(ordinal) => Some(index.query_row(
             "SELECT short_name, identifier, url FROM licenses WHERE license_ordinal = ?1",
             [ordinal],
@@ -741,18 +730,25 @@ fn recording_from_raw(index: &Connection, raw: RawRecording) -> Result<Recording
         )?),
         None => None,
     };
-    let author_urls = match raw.12 {
+    let author_urls = match raw.author_urls_json {
         Some(json) => serde_json::from_str::<Vec<String>>(&json)
             .map_err(|error| PackError::Corrupt(format!("invalid author URLs: {error}")))?,
         None => Vec::new(),
     };
-    let audio = match (raw.14, raw.15, raw.16, raw.17) {
-        (Some(sha256), Some(size), Some(duration), Some(chunk)) => Some(RecordingAudio {
-            sha256: bytes32("recording blob digest", &sha256)?,
-            size_bytes: positive("recording size", size)?,
-            duration_ms: positive("recording duration", duration)?,
-            chunk_ordinal: nonnegative("recording chunk", chunk)?,
-        }),
+    let audio = match (
+        raw.opus_sha256,
+        raw.opus_size_bytes,
+        raw.duration_ms,
+        raw.chunk_ordinal,
+    ) {
+        (Some(sha256), Some(size_bytes), Some(duration_ms), Some(chunk_ordinal)) => {
+            Some(RecordingAudio {
+                sha256: bytes32("recording blob digest", &sha256)?,
+                size_bytes,
+                duration_ms,
+                chunk_ordinal,
+            })
+        }
         (None, None, None, None) => None,
         _ => {
             return Err(PackError::Corrupt(
@@ -761,7 +757,7 @@ fn recording_from_raw(index: &Connection, raw: RawRecording) -> Result<Recording
         }
     };
     let source_sha1 = raw
-        .5
+        .source_sha1
         .map(|bytes| {
             <[u8; 20]>::try_from(bytes.as_slice())
                 .map_err(|_| PackError::Corrupt("source SHA-1 is not 20 bytes".to_owned()))
@@ -771,32 +767,27 @@ fn recording_from_raw(index: &Connection, raw: RawRecording) -> Result<Recording
     // page are stored only when they differ from what Commons would derive from the file
     // name. Unresolved rows have no source facts at all and derive nothing.
     let source_title = raw
-        .4
-        .or_else(|| source_sha1.is_some().then(|| commons_title(&raw.0)));
-    let description_url = raw.9.or_else(|| {
-        source_title
-            .as_deref()
-            .map(crate::semantic::commons_description_url)
-    });
+        .source_title
+        .or_else(|| source_sha1.is_some().then(|| commons_title(&raw.file_name)));
+    let description_url = raw
+        .description_url
+        .or_else(|| source_title.as_deref().map(commons_description_url));
     Ok(Recording {
         facts: RecordingFacts {
-            file_name: raw.0,
-            status: RecordingStatus::from_code(raw.1)?,
-            reason: raw.2,
-            reference_count: positive("reference count", raw.3)?,
+            file_name: raw.file_name,
+            status: RecordingStatus::from_code(raw.status)?,
+            reason: raw.reason,
+            reference_count: raw.reference_count,
             source_title,
             source_sha1,
-            source_timestamp: raw.6,
-            source_media_type: raw.7,
-            source_size_bytes: raw
-                .8
-                .map(|size| nonnegative("source size", size))
-                .transpose()?,
+            source_timestamp: raw.source_timestamp,
+            source_media_type: raw.source_media_type,
+            source_size_bytes: raw.source_size_bytes,
             description_url,
             license,
-            author_text: raw.11,
+            author_text: raw.author_text,
             author_urls,
-            attribution_required: raw.13.map(|value| value == 1),
+            attribution_required: raw.attribution_required.map(|value| value == 1),
         },
         audio,
     })
@@ -805,12 +796,8 @@ fn recording_from_raw(index: &Connection, raw: RawRecording) -> Result<Recording
 fn read_audio_manifest(
     directory: &Path,
     expected: &ExpectedPack,
-    limits: PackLimits,
-) -> Result<(AudioManifest, PackId, PackRevision), PackError> {
-    let manifest_bytes = read_bounded(
-        &directory.join(AUDIO_MANIFEST_FILE),
-        limits.max_manifest_bytes,
-    )?;
+) -> Result<AudioManifest, PackError> {
+    let manifest_bytes = read_bounded(&directory.join(AUDIO_MANIFEST_FILE), MAX_MANIFEST_BYTES)?;
     if Sha256::digest(&manifest_bytes).as_slice() != expected.manifest_sha256.as_bytes() {
         return Err(PackError::Corrupt(
             "audio manifest SHA-256 differs from the expected pack".to_owned(),
@@ -818,29 +805,27 @@ fn read_audio_manifest(
     }
     let manifest: AudioManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| PackError::Malformed(format!("invalid audio manifest: {error}")))?;
-    let pack_id = PackId::from_str(&manifest.pack_id)?;
-    let revision = PackRevision::from_bytes(*manifest.pack_revision.as_bytes());
     if manifest.manifest_version != 1 || manifest.format_version != FORMAT_VERSION {
         return Err(PackError::Malformed(
             "unsupported audio manifest or format version".to_owned(),
         ));
     }
-    if expected.pack_id != pack_id || expected.pack_revision != revision {
+    if expected.pack_id != manifest.pack_id || expected.pack_revision != manifest.pack_revision {
         return Err(PackError::Corrupt(
             "audio collection identity differs from the expected pack".to_owned(),
         ));
     }
-    if manifest.assets.len() > limits.max_assets {
+    if manifest.assets.len() > MAX_ASSETS {
         return Err(PackError::Limit(
             "audio manifest declares too many assets".to_owned(),
         ));
     }
-    Ok((manifest, pack_id, revision))
+    Ok(manifest)
 }
 
 fn open_chunk(
     pack_id: &PackId,
-    position: usize,
+    position: u64,
     route: ChunkRoute,
     chunk_assets: &mut BTreeMap<String, (PathBuf, PackAsset)>,
     admission: Admission,
@@ -852,7 +837,7 @@ fn open_chunk(
             route.file_name
         ))
     })?;
-    if route.ordinal != position as u64
+    if route.ordinal != position
         || route.file_name != expected_name
         || route.file_size != asset.size_bytes
         || route.file_sha256 != *asset.sha256.as_bytes()
@@ -868,15 +853,13 @@ fn open_chunk(
         AUDIO_CHUNK_SCHEMA,
         admission,
     )?;
-    let (chunk_pack_id, chunk_ordinal, blob_count): (String, i64, i64) = connection.query_row(
+    let (chunk_pack_id, chunk_ordinal, blob_count): (PackId, u64, u64) = connection.query_row(
         "SELECT pack_id, chunk_ordinal, blob_count FROM chunk_metadata \
              WHERE singleton = 1",
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    if chunk_pack_id != pack_id.as_str()
-        || nonnegative("chunk ordinal", chunk_ordinal)? != route.ordinal
-        || nonnegative("chunk blob count", blob_count)? != route.blob_count
+    if chunk_pack_id != *pack_id || chunk_ordinal != route.ordinal || blob_count != route.blob_count
     {
         return Err(PackError::Corrupt(format!(
             "audio chunk {} metadata disagrees with its route",
@@ -884,14 +867,12 @@ fn open_chunk(
         )));
     }
     if admission == Admission::Full {
-        let (count, bytes): (i64, Option<i64>) = connection.query_row(
+        let (count, bytes): (u64, Option<u64>) = connection.query_row(
             "SELECT count(*), sum(length(bytes)) FROM blobs",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        if nonnegative("blob count", count)? != route.blob_count
-            || nonnegative("blob bytes", bytes.unwrap_or(0))? != route.blob_bytes
-        {
+        if count != route.blob_count || bytes.unwrap_or(0) != route.blob_bytes {
             return Err(PackError::Corrupt(format!(
                 "audio chunk {} totals disagree with its route",
                 route.ordinal
@@ -904,43 +885,6 @@ fn open_chunk(
     })
 }
 
-const fn expected_encoder_profile(delivery: AudioDelivery) -> &'static str {
-    match delivery {
-        AudioDelivery::Bundled => AUDIO_ENCODER_PROFILE,
-        AudioDelivery::Remote => "",
-    }
-}
-
-fn check_audio_identity(
-    pack_id: &PackId,
-    revision: &PackRevision,
-    metadata: &AudioMetadata,
-) -> Result<(), PackError> {
-    let derived = PackRevision::derive_audio(AudioRevisionInputs {
-        pack_id,
-        corpus_language: &metadata.corpus_language,
-        source_corpus_pack_id: &PackId::from_str(&metadata.source_corpus_pack_id)?,
-        source_corpus_revision: &PackRevision::from_bytes(metadata.source_corpus_revision),
-        acquired_at: &metadata.acquired_at,
-        encoder_profile: &metadata.encoder_profile,
-        builder_revision: &metadata.builder_revision,
-        delivery: metadata.delivery.as_str(),
-        chunk_count: metadata.chunk_count,
-        recording_input_digest: &metadata.recording_input_digest,
-        minimum_app_version: &metadata.minimum_app_version,
-    });
-    if metadata.pack_id != pack_id.as_str()
-        || &metadata.revision != revision.as_bytes()
-        || derived != *revision
-        || metadata.encoder_profile != expected_encoder_profile(metadata.delivery)
-    {
-        return Err(PackError::Corrupt(
-            "audio manifest and index metadata disagree".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 fn read_metadata(index: &Connection) -> Result<AudioMetadata, PackError> {
     let count: i64 = index.query_row("SELECT count(*) FROM collection_metadata", [], |row| {
         row.get(0)
@@ -950,48 +894,49 @@ fn read_metadata(index: &Connection) -> Result<AudioMetadata, PackError> {
             "audio index must contain one metadata row".to_owned(),
         ));
     }
-    let raw = index.query_row(
-        "SELECT pack_id, pack_revision, corpus_language, source_corpus_pack_id, \
-         source_corpus_revision, acquired_at, encoder_profile, builder_revision, delivery, \
-         chunk_count, recording_count, available_count, recording_input_digest, \
-         minimum_app_version \
+    let (metadata, encoder_profile): (AudioMetadata, String) = index.query_row(
+        "SELECT pack_id, corpus_language, source_corpus_pack_id, source_corpus_revision, \
+         acquired_at, encoder_profile, builder_revision, delivery, chunk_count, \
+         recording_count, available_count, recording_input_digest, minimum_app_version \
          FROM collection_metadata WHERE singleton = 1",
         [],
         |row| {
+            let source_corpus_revision: Vec<u8> = row.get(3)?;
+            let recording_input_digest: Vec<u8> = row.get(11)?;
+            let delivery: String = row.get(7)?;
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Vec<u8>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, i64>(9)?,
-                row.get::<_, i64>(10)?,
-                row.get::<_, i64>(11)?,
-                row.get::<_, Vec<u8>>(12)?,
-                row.get::<_, String>(13)?,
+                AudioMetadata {
+                    pack_id: row.get(0)?,
+                    corpus_language: row.get(1)?,
+                    source_corpus_pack_id: row.get(2)?,
+                    source_corpus_revision: PackRevision::from_bytes(
+                        bytes32("source corpus revision", &source_corpus_revision)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    ),
+                    acquired_at: row.get(4)?,
+                    builder_revision: row.get(6)?,
+                    delivery: AudioDelivery::parse(&delivery)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    chunk_count: row.get(8)?,
+                    recording_count: row.get(9)?,
+                    available_count: row.get(10)?,
+                    recording_input_digest: bytes32(
+                        "recording input digest",
+                        &recording_input_digest,
+                    )
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    minimum_app_version: row.get(12)?,
+                },
+                row.get(5)?,
             ))
         },
     )?;
-    Ok(AudioMetadata {
-        pack_id: raw.0,
-        revision: bytes32("audio revision", &raw.1)?,
-        corpus_language: raw.2,
-        source_corpus_pack_id: raw.3,
-        source_corpus_revision: bytes32("source corpus revision", &raw.4)?,
-        acquired_at: raw.5,
-        encoder_profile: raw.6,
-        builder_revision: raw.7,
-        delivery: AudioDelivery::parse(&raw.8)?,
-        chunk_count: nonnegative("chunk count", raw.9)?,
-        recording_count: nonnegative("recording count", raw.10)?,
-        available_count: nonnegative("available count", raw.11)?,
-        recording_input_digest: bytes32("recording input digest", &raw.12)?,
-        minimum_app_version: raw.13,
-    })
+    if encoder_profile != metadata.delivery.encoder_profile() {
+        return Err(PackError::Corrupt(
+            "audio encoder profile disagrees with its delivery".to_owned(),
+        ));
+    }
+    Ok(metadata)
 }
 
 fn read_chunk_routes(index: &Connection) -> Result<Vec<ChunkRoute>, PackError> {
@@ -1000,27 +945,18 @@ fn read_chunk_routes(index: &Connection) -> Result<Vec<ChunkRoute>, PackError> {
          FROM chunks ORDER BY chunk_ordinal",
     )?;
     let rows = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Vec<u8>>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, i64>(5)?,
-        ))
-    })?;
-    rows.map(|row| {
-        let row = row?;
+        let file_sha256: Vec<u8> = row.get(2)?;
         Ok(ChunkRoute {
-            ordinal: nonnegative("chunk ordinal", row.0)?,
-            file_name: row.1,
-            file_sha256: bytes32("chunk SHA-256", &row.2)?,
-            file_size: positive("chunk size", row.3)?,
-            blob_count: nonnegative("chunk blob count", row.4)?,
-            blob_bytes: nonnegative("chunk blob bytes", row.5)?,
+            ordinal: row.get(0)?,
+            file_name: row.get(1)?,
+            file_sha256: bytes32("chunk SHA-256", &file_sha256)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            file_size: row.get(3)?,
+            blob_count: row.get(4)?,
+            blob_bytes: row.get(5)?,
         })
-    })
-    .collect()
+    })?;
+    rows.collect::<Result<_, _>>().map_err(PackError::from)
 }
 
 fn validate_recording_relations(
@@ -1031,14 +967,14 @@ fn validate_recording_relations(
         index.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
             row.get(0)
         })?;
-    let (recordings, available): (i64, i64) = index.query_row(
+    let (recordings, available): (u64, u64) = index.query_row(
         "SELECT count(*), coalesce(sum(status = 1), 0) FROM recordings",
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     if foreign_keys != 0
-        || nonnegative("recording count", recordings)? != metadata.recording_count
-        || nonnegative("available count", available)? != metadata.available_count
+        || recordings != metadata.recording_count
+        || available != metadata.available_count
     {
         return Err(PackError::Corrupt(
             "audio recording relations or totals are inconsistent".to_owned(),

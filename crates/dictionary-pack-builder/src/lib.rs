@@ -5,38 +5,25 @@ mod audio_build;
 mod audio_state;
 mod builder;
 mod catalog;
-mod manifest;
-mod report;
 mod snapshot;
 mod source;
 #[cfg(feature = "transcode")]
 mod transcode;
 
-pub use audio_acquire::{
-    AcquireOptions, AcquireReport, MAX_DOWNLOAD_CONCURRENCY, acquire, utc_now,
-};
+pub use audio_acquire::{AcquireOptions, AcquireReport, acquire, utc_now};
 pub use audio_build::{
     AudioBuildOptions, AudioBuildResult, MAX_RECORDING_SECONDS, build_audio_collection,
 };
 pub use audio_state::{
-    AcquisitionState, CommonsFacts, FileState, Phase, ReferenceSet, author_from_html,
-    qualify_license,
+    AcquisitionMetadata, AcquisitionState, CommonsFacts, FileState, Phase, ReferenceSet,
 };
-pub use builder::{BuildError, BuildOptions, BuildResult, build_pack};
-pub use catalog::{
-    AudioConfig, CatalogBuildError, CatalogConfig, CorpusConfig, assemble_catalog,
-    release_manifest_name,
-};
-pub use manifest::{AssetManifest, BuildManifest, PackAsset, PackManifest, Sha256Hex};
-pub use report::{
-    BUILD_REPORT_FILE, BuildReport, CompressionRatio, LargestSelectedRecord, ReportAsset,
-    SelectedReport, SourceReport, SourceShapeObservation, TranslationCoverage,
-};
+pub use builder::{BuildError, BuildResult, build_pack};
+pub use catalog::{CatalogBuildError, CatalogConfig, CorpusConfig, assemble_catalog};
 pub use snapshot::{
     AudioEditionConfig, CapturedOrigin, EditionConfig, EditionOrigin, MAX_MIRROR_PART_BYTES,
     MirrorAsset, SnapshotError, SourceDigest, SourceMirror, SourceSnapshot, UncompressedSource,
-    build_manifest, validate_snapshot,
+    corpus_identity, validate_snapshot,
 };
-pub use source::{JsonlSourceReader, SourceIngestionError, SourceRecord};
+pub use source::SourceIngestionError;
 #[cfg(feature = "transcode")]
 pub use transcode::{TranscodeError, Transcoded, transcode_to_opus};

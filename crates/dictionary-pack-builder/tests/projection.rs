@@ -1,57 +1,10 @@
-use std::io::Cursor;
-use std::sync::Arc;
+mod common;
 
 use elephant_ladder_dictionary_pack::{
-    BilingualView, DictionaryPack, DictionarySnapshot, DictionaryView, EmphasisRange,
-    EntryReference, LookupOptions, MonolingualView, PackError, PackLimits, ProjectionOptions,
-    RelationKind, Ruby, Section, SectionPage, ViewOutcome,
+    DictionarySnapshot, DictionaryView, EmphasisRange, EntryId, EntryReference, LookupOptions,
+    PackError, ProjectionOptions, RelationKind, Ruby, Section, SectionPage, ViewOutcome,
 };
-use elephant_ladder_dictionary_pack_builder::{BuildManifest, BuildOptions, Sha256Hex, build_pack};
 use serde_json::json;
-use sha2::{Digest, Sha256};
-use tempfile::TempDir;
-
-fn digest(bytes: &[u8]) -> Sha256Hex {
-    Sha256Hex::from_bytes(Sha256::digest(bytes).into())
-}
-
-fn build(language: &str, source: &str) -> (TempDir, Arc<DictionaryPack>) {
-    let source_manifest = json!({"provider":"projection-fixture"});
-    let license_manifest = json!({"license":"fixture"});
-    let manifest = BuildManifest {
-        pack_id: format!("wiktionary-{language}-{language}"),
-        corpus_language: language.to_owned(),
-        wiktionary_edition: language.to_owned(),
-        wiktionary_dump_date: "2026-09-02".to_owned(),
-        kaikki_extraction_date: "2026-09-06".to_owned(),
-        source_url: "https://example.invalid/source.jsonl.gz".to_owned(),
-        compressed_source_sha256: digest(b"compressed fixture"),
-        uncompressed_source_sha256: digest(source.as_bytes()),
-        wiktextract_revision: "wiktextract-revision".to_owned(),
-        wikitextprocessor_revision: "wikitextprocessor-revision".to_owned(),
-        builder_revision: "builder-v1".to_owned(),
-        compression_profile: "zstd-v1-level-6".to_owned(),
-        routing_policy: "routing-v1".to_owned(),
-        target_shard_payload_bytes: 1_000_000,
-        source_manifest_sha256: digest(&serde_json::to_vec(&source_manifest).unwrap()),
-        source_manifest,
-        license_manifest_sha256: digest(&serde_json::to_vec(&license_manifest).unwrap()),
-        license_manifest,
-        compatible_audio_collection: None,
-        minimum_app_version: "0.1.0".to_owned(),
-    };
-    let temporary = tempfile::tempdir().unwrap();
-    let output = temporary.path().join("pack");
-    build_pack(
-        &manifest,
-        Cursor::new(source.as_bytes()),
-        &output,
-        BuildOptions::default(),
-    )
-    .unwrap();
-    let pack = Arc::new(DictionaryPack::open(output, PackLimits::default()).unwrap());
-    (temporary, pack)
-}
 
 fn english_record() -> String {
     let record = json!({
@@ -64,6 +17,7 @@ fn english_record() -> String {
         "wikipedia": ["Running"],
         "sounds": [
             {"ipa": "/ɹʌn/", "tags": ["US"], "audio": "En-us-run.ogg", "topics": ["sports"]},
+            {"ipa": "/ɹʌn/", "audio": "not a file"},
         ],
         "hyphenations": [{"parts": ["run"]}],
         "forms": [
@@ -76,6 +30,7 @@ fn english_record() -> String {
                 "glosses": ["To move swiftly."],
                 "senseid": ["en:move swiftly"],
                 "qualifier": "intransitive",
+                "wikipedia": ["Running"],
                 "examples": [
                     {"text": "I run daily.", "bold_text_offsets": [[2, 5]],
                      "type": "example", "translation": "Je cours."},
@@ -141,9 +96,9 @@ fn japanese_record() -> String {
 
 #[test]
 fn detail_projection_exposes_every_known_english_section() {
-    let (_temporary, pack) = build("en", &english_record());
+    let (_temporary, pack) = common::build("en", english_record().as_bytes(), 1_000_000);
     pack.validate_all().unwrap();
-    let summary = pack.lookup("run", LookupOptions::default()).unwrap();
+    let summary = pack.lookup("run", None, LookupOptions::default()).unwrap();
     let summary = &summary.matches[0].entry;
     assert_eq!(summary.forms.total, 3);
     assert!(summary.forms.items.is_empty());
@@ -156,17 +111,14 @@ fn detail_projection_exposes_every_known_english_section() {
     assert_eq!(summary.etymology.total, 1);
 
     let entry = pack
-        .entry(&summary.reference, ProjectionOptions::detail())
+        .entry(&summary.reference, None, ProjectionOptions::detail())
         .unwrap();
     assert_eq!(entry.etymology_number.as_deref(), Some("2"));
     assert_eq!(entry.etymology.items, ["From Middle English rinnen."]);
-    assert_eq!(entry.wikipedia, ["Running"]);
     let pronunciation = &entry.pronunciations.items[0];
     assert_eq!(pronunciation.topics, ["sports"]);
-    assert_eq!(
-        pronunciation.audio.as_ref().unwrap().file_name.as_deref(),
-        Some("En-us-run.ogg")
-    );
+    assert_eq!(pronunciation.audio.as_deref(), Some("En-us-run.ogg"));
+    assert_eq!(entry.pronunciations.items[1].audio, None);
     assert_eq!(entry.hyphenations.items[0].parts, ["run"]);
     assert_eq!(entry.forms.items[1].form, "ran");
     assert_eq!(entry.forms.items[1].ipa, ["/ɹæn/"]);
@@ -174,6 +126,7 @@ fn detail_projection_exposes_every_known_english_section() {
     let sense = &entry.senses.items[0];
     assert_eq!(sense.qualifier.as_deref(), Some("intransitive"));
     assert_eq!(sense.sense_ids, ["en:move swiftly"]);
+    assert_eq!(sense.wikipedia, ["Running"]);
     assert_eq!(
         sense.examples.items[0].text_emphasis,
         [EmphasisRange { start: 2, end: 5 }]
@@ -215,9 +168,9 @@ fn detail_projection_exposes_every_known_english_section() {
 
 #[test]
 fn section_pages_window_lists_by_stable_offset() {
-    let (_temporary, pack) = build("en", &english_record());
+    let (_temporary, pack) = common::build("en", english_record().as_bytes(), 1_000_000);
     let reference = pack
-        .lookup("run", LookupOptions::default())
+        .lookup("run", None, LookupOptions::default())
         .unwrap()
         .matches[0]
         .entry
@@ -226,18 +179,18 @@ fn section_pages_window_lists_by_stable_offset() {
     let options = ProjectionOptions::detail();
 
     let SectionPage::Forms(forms) = pack
-        .section_page(&reference, Section::Forms, 1, 1, options)
+        .section_page(&reference, None, Section::Forms, 1, 1, options)
         .unwrap()
     else {
         panic!("expected forms");
     };
     assert_eq!((forms.offset, forms.total), (1, 3));
     assert_eq!(forms.items[0].form, "ran");
-    assert!(forms.is_partial());
 
     let SectionPage::Relations(derived) = pack
         .section_page(
             &reference,
+            None,
             Section::Relations(RelationKind::Derived),
             2,
             10,
@@ -250,7 +203,7 @@ fn section_pages_window_lists_by_stable_offset() {
     assert_eq!(derived.items[0].word.as_deref(), Some("outrun"));
 
     let SectionPage::Descendants(descendants) = pack
-        .section_page(&reference, Section::Descendants, 1, 1, options)
+        .section_page(&reference, None, Section::Descendants, 1, 1, options)
         .unwrap()
     else {
         panic!("expected descendants");
@@ -267,6 +220,7 @@ fn section_pages_window_lists_by_stable_offset() {
     let SectionPage::Examples(examples) = pack
         .section_page(
             &reference,
+            None,
             Section::SenseExamples { sense: 0 },
             1,
             5,
@@ -280,6 +234,7 @@ fn section_pages_window_lists_by_stable_offset() {
     assert_eq!(
         pack.section_page(
             &reference,
+            None,
             Section::SenseExamples { sense: 9 },
             0,
             5,
@@ -290,7 +245,7 @@ fn section_pages_window_lists_by_stable_offset() {
     );
 
     let SectionPage::Etymology(beyond) = pack
-        .section_page(&reference, Section::Etymology, 5, 5, options)
+        .section_page(&reference, None, Section::Etymology, 5, 5, options)
         .unwrap()
     else {
         panic!("expected etymology");
@@ -298,28 +253,28 @@ fn section_pages_window_lists_by_stable_offset() {
     assert_eq!((beyond.total, beyond.items.len()), (1, 0));
 
     assert!(matches!(
-        pack.section_page(&reference, Section::Forms, 0, 0, options),
+        pack.section_page(&reference, None, Section::Forms, 0, 0, options),
         Err(PackError::Limit(_))
     ));
     assert!(matches!(
-        pack.section_page(&reference, Section::Forms, 0, 257, options),
+        pack.section_page(&reference, None, Section::Forms, 0, 257, options),
         Err(PackError::Limit(_))
     ));
 }
 
 #[test]
 fn entry_reads_reject_references_from_other_packs_or_positions() {
-    let (_first_temporary, first) = build("en", &english_record());
-    let (_second_temporary, second) = build("ja", &japanese_record());
+    let (_first_temporary, first) = common::build("en", english_record().as_bytes(), 1_000_000);
+    let (_second_temporary, second) = common::build("ja", japanese_record().as_bytes(), 1_000_000);
     let reference = first
-        .lookup("run", LookupOptions::default())
+        .lookup("run", None, LookupOptions::default())
         .unwrap()
         .matches[0]
         .entry
         .reference
         .clone();
     assert!(matches!(
-        second.entry(&reference, ProjectionOptions::detail()),
+        second.entry(&reference, None, ProjectionOptions::detail()),
         Err(PackError::UnknownEntry)
     ));
     let moved = EntryReference {
@@ -327,25 +282,25 @@ fn entry_reads_reject_references_from_other_packs_or_positions() {
         ..reference.clone()
     };
     assert!(matches!(
-        first.entry(&moved, ProjectionOptions::detail()),
+        first.entry(&moved, None, ProjectionOptions::detail()),
         Err(PackError::UnknownEntry)
     ));
     let unknown = EntryReference {
-        entry_id: elephant_ladder_dictionary_pack::EntryId::from_bytes([9; 32]),
+        entry_id: EntryId::from_bytes([9; 32]),
         ..reference
     };
     assert!(matches!(
-        first.entry(&unknown, ProjectionOptions::detail()),
+        first.entry(&unknown, None, ProjectionOptions::detail()),
         Err(PackError::UnknownEntry)
     ));
 }
 
 #[test]
 fn bilingual_entry_reads_filter_translations_to_the_target() {
-    let (_temporary, pack) = build("en", &english_record());
-    let view = BilingualView::new("english-french", pack.clone(), "fr").unwrap();
+    let (_temporary, pack) = common::build("en", english_record().as_bytes(), 1_000_000);
+    let view = DictionaryView::new("english-french", pack.clone(), Some("fr")).unwrap();
     let reference = pack
-        .lookup("run", LookupOptions::default())
+        .lookup("run", None, LookupOptions::default())
         .unwrap()
         .matches[0]
         .entry
@@ -375,16 +330,18 @@ fn bilingual_entry_reads_filter_translations_to_the_target() {
 
 #[test]
 fn japanese_shapes_keep_ruby_text_indexes_and_etymology_lists() {
-    let (_temporary, pack) = build("ja", &japanese_record());
+    let (_temporary, pack) = common::build("ja", japanese_record().as_bytes(), 1_000_000);
     pack.validate_all().unwrap();
     let reference = pack
-        .lookup("はしる", LookupOptions::default())
+        .lookup("はしる", None, LookupOptions::default())
         .unwrap()
         .matches[0]
         .entry
         .reference
         .clone();
-    let entry = pack.entry(&reference, ProjectionOptions::detail()).unwrap();
+    let entry = pack
+        .entry(&reference, None, ProjectionOptions::detail())
+        .unwrap();
     assert_eq!(entry.part_of_speech_title.as_deref(), Some("動詞"));
     assert_eq!(entry.etymology.total, 2);
     assert_eq!(
@@ -434,7 +391,7 @@ fn projection_rejects_malformed_extended_shapes() {
     {
         let word = format!("malformed{index}");
         let source = format!("{{\"lang_code\":\"en\",\"word\":\"{word}\",{malformed}}}\n");
-        let (_temporary, pack) = build("en", &source);
+        let (_temporary, pack) = common::build("en", source.as_bytes(), 1_000_000);
         assert!(
             matches!(pack.validate_all(), Err(PackError::Corrupt(_))),
             "accepted {malformed}"
@@ -444,13 +401,14 @@ fn projection_rejects_malformed_extended_shapes() {
 
 #[test]
 fn snapshot_lookup_orders_views_by_selection_language_and_isolates_failures() {
-    let (_english_temporary, english) = build("en", &english_record());
-    let (_japanese_temporary, japanese) = build("ja", &japanese_record());
+    let (_english_temporary, english) = common::build("en", english_record().as_bytes(), 1_000_000);
+    let (_japanese_temporary, japanese) =
+        common::build("ja", japanese_record().as_bytes(), 1_000_000);
     let snapshot = DictionarySnapshot::new(vec![
-        DictionaryView::Monolingual(MonolingualView::new("en", english.clone()).unwrap()),
-        DictionaryView::Bilingual(BilingualView::new("en-fr", english.clone(), "fr").unwrap()),
-        DictionaryView::Bilingual(BilingualView::new("en-it", english, "it").unwrap()),
-        DictionaryView::Monolingual(MonolingualView::new("ja", japanese).unwrap()),
+        DictionaryView::new("en", english.clone(), None).unwrap(),
+        DictionaryView::new("en-fr", english.clone(), Some("fr")).unwrap(),
+        DictionaryView::new("en-it", english, Some("it")).unwrap(),
+        DictionaryView::new("ja", japanese, None).unwrap(),
     ])
     .unwrap();
 
@@ -487,17 +445,19 @@ fn snapshot_lookup_orders_views_by_selection_language_and_isolates_failures() {
         ViewOutcome::Completed(outcome) => outcome.matches[0].entry.reference.clone(),
         _ => unreachable!(),
     };
-    let entry = snapshot
-        .view("en-fr")
-        .unwrap()
+    let view = |view_id| {
+        snapshot
+            .views()
+            .iter()
+            .find(|view| view.view_id() == view_id)
+            .unwrap()
+    };
+    let entry = view("en-fr")
         .entry(&reference, ProjectionOptions::detail())
         .unwrap();
     assert_eq!(entry.sense_translation_total, 1);
     assert!(matches!(
-        snapshot
-            .view("ja")
-            .unwrap()
-            .entry(&reference, ProjectionOptions::detail()),
+        view("ja").entry(&reference, ProjectionOptions::detail()),
         Err(PackError::UnknownEntry)
     ));
 }

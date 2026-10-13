@@ -1,68 +1,73 @@
 # Elephant Ladder Dictionary
 
-Elephant Ladder Dictionary builds immutable offline dictionary packs from raw
-Wiktextract JSONL and provides exact lookup for Elephant Ladder. The format and API
-are experimental and may change without compatibility guarantees.
+The dictionaries inside [Elephant Ladder](https://github.com/redvelo/elephant-ladder):
+the pack format, the tools that build packs from Wiktionary, and the catalog the
+application installs them from. Readers never see this repository; they install a
+language from the application's Dictionaries dialog and look words up offline.
 
-- `dictionary-pack` opens, validates, and queries packs.
-- `dictionary-pack-builder` builds packs and provides the maintenance CLI.
+Each pack is one language's Wiktionary edition, extracted by
+[Wiktextract](https://github.com/tatuylonen/wiktextract) and published by
+[Kaikki](https://kaikki.org), kept whole: every selected record is stored byte for
+byte, so a later version of the reader can show more of it without rebuilding the pack.
+Pronunciation recordings come from Wikimedia Commons as separate audio collections, either
+bundled as Ogg Opus for offline use or fetched on demand.
 
-Reader integration and pack acquisition are outside this repository.
+Seven languages are published: English, French, German, Spanish, Italian, Japanese, and
+Chinese, each with a monolingual view and a bilingual view to or from English.
+
+## What is here
+
+- `dictionary-pack`: opens, verifies, and queries packs and audio collections. Lookup is
+  exact, in six stages from the authored headword down to a case-folded inflected form,
+  and every record served is re-verified against its digest.
+- `dictionary-pack-builder`: the `elephant-dictionary-pack` command line: build,
+  validate, acquire and transcode audio, and assemble a catalog.
+- `editions/`: one file per Wiktionary edition with its pack identity and source URLs.
+- `catalog-v1.json`: the published catalog. The application reads it from this
+  repository's default branch over HTTPS and accepts each asset only on the SHA-256 the
+  catalog declares.
+- `docs/`: the [pack format](docs/format.md) and the
+  [snapshot and publishing procedures](docs/sources.md).
+
+## What it is not
+
+- Not a general dictionary library. There is no StarDict, MDict, or DSL import, no fuzzy
+  search, and no morphology beyond the forms Wiktionary authored.
+- Not a service. Nothing here runs online; the application downloads a pack once and
+  reads it locally.
+- Not a source of truth for the data. Wiktionary is; this repository records which
+  extraction a pack was built from so the build can be reproduced.
 
 ## Build
 
-Building requires Rust 1.88 or newer, a C compiler, and Python 3.11 or newer for
-source capture. The CLI does not download source data.
-
-Packs are built only from immutable source snapshots; see
-[Source Snapshots](docs/sources.md). To build locally from a snapshot's mirrored
-archive:
+Rust 1.93 or newer, a C compiler, and Python 3.11 or newer for source capture. The CLI
+never downloads source data: packs are built only from snapshots mirrored into
+immutable releases of this repository, so a build reproduces after Kaikki replaces its
+archive.
 
 ```sh
-elephant-dictionary-pack source manifest \
-  --edition editions/EDITION.json --snapshot sources/SNAPSHOT.json \
-  --builder-revision REVISION > build.json
-gzip -dc SOURCE.jsonl.gz | \
-  elephant-dictionary-pack build --manifest build.json --input - --output PACK_DIRECTORY
+gzip -dc SOURCE.jsonl.gz | elephant-dictionary-pack build \
+  --edition editions/EDITION.json --snapshot SNAPSHOT.json \
+  --builder-revision REVISION --input - --output PACK_DIRECTORY
+elephant-dictionary-pack validate --pack PACK_DIRECTORY
 ```
 
-The output directory must not already exist.
+The output directory must not already exist. Validation scans every record and lookup
+row; building the same snapshot twice with the same builder revision yields identical
+packs.
 
-## Validate
-
-```sh
-cargo run --release \
-  -p elephant-ladder-dictionary-pack-builder \
-  --bin elephant-dictionary-pack -- \
-  validate --pack PACK_DIRECTORY
-```
-
-Validation scans every record and lookup row. Pack integrity is only meaningful
-relative to a manifest obtained through a trusted channel, such as a signed catalog.
-
-## Release Catalog
+## Publish
 
 ```sh
 scripts/publish_catalog.py CATALOG_CONFIG.json
 ```
 
-That assembles the release, checks every asset against the catalog, uploads the assets
-under the tag the base URL names, and commits the catalog here, leaving only `git push`.
-The assembly step alone is:
-
-```sh
-elephant-dictionary-pack catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY
-```
-
-`CATALOG_CONFIG.json` names the catalog revision, generation time, release base URL,
-and each built pack directory with its qualified views. A pack published by an earlier
-release keeps its own `release_base_url` so its assets are referenced rather than
-uploaded again. See the [format documentation](docs/format.md).
-
-Pack assets are published as a release under the tag the base URL names. The catalog
-is committed to this repository instead, and the application reads it from the default
-branch over HTTPS. Assets need no trust of their own: the catalog declares each one's
-SHA-256, and the application installs nothing that does not match.
+The config names the catalog revision, the release base URL, each built pack directory
+with its views, and each audio collection. The script assembles the release, checks
+every asset against the catalog, uploads the assets under the tag the base URL names,
+and commits the catalog, leaving only `git push`. Publishing new packs needs no
+application release. Releases in this repository are pack releases only; the code is
+not released here.
 
 ## Development
 
@@ -74,5 +79,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 ## License
 
-Source code is available under Apache-2.0 or MIT. Dictionary data retains its source
-licenses; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).
+Source code is Apache-2.0 or MIT, at your option. Dictionary data keeps the license of
+its Wiktionary edition, CC BY-SA and GFDL, and each recording keeps its own Commons
+license, carried inside the pack with its author; see
+[Third-Party Notices](THIRD_PARTY_NOTICES.md) for the fixtures in this repository.

@@ -1,12 +1,7 @@
-use std::str::FromStr;
-
+use elephant_ladder_dictionary_pack::{CorpusIdentity, PackId, Sha256Hex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
-
-use crate::{BuildManifest, Sha256Hex};
-use elephant_ladder_dictionary_pack::{COMPRESSION_PROFILE, PackId, ROUTING_POLICY};
 
 /// Stable, hand-maintained facts about one Wiktionary edition corpus.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -15,7 +10,7 @@ pub struct EditionConfig {
     pub schema_version: u32,
     pub wiktionary_edition: String,
     pub corpus_language: String,
-    pub pack_id: String,
+    pub pack_id: PackId,
     pub origin: EditionOrigin,
     pub target_shard_payload_bytes: u64,
     pub minimum_app_version: String,
@@ -27,7 +22,7 @@ pub struct EditionConfig {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioEditionConfig {
-    pub pack_id: String,
+    pub pack_id: PackId,
     /// Fixed so recordings keep their chunk across collection revisions.
     pub chunk_count: u64,
 }
@@ -101,16 +96,6 @@ pub struct MirrorAsset {
     pub sha256: Sha256Hex,
 }
 
-impl MirrorAsset {
-    #[must_use]
-    pub fn url(&self, mirror: &SourceMirror) -> String {
-        format!(
-            "https://github.com/{}/releases/download/{}/{}",
-            mirror.repository, mirror.release_tag, self.file_name
-        )
-    }
-}
-
 #[derive(Debug, Error, Eq, PartialEq)]
 #[error("invalid source snapshot: {0}")]
 pub struct SnapshotError(String);
@@ -131,7 +116,6 @@ pub fn validate_snapshot(
     if edition.schema_version != 1 || snapshot.schema_version != 1 {
         return fail("unsupported schema version");
     }
-    PackId::from_str(&edition.pack_id).map_err(|error| SnapshotError(error.to_string()))?;
     if snapshot.wiktionary_edition != edition.wiktionary_edition
         || snapshot.origin.source_url != edition.origin.source_url
         || snapshot.origin.info_url != edition.origin.info_url
@@ -203,16 +187,16 @@ pub fn validate_snapshot(
     Ok(())
 }
 
-/// Derives the fully pinned build manifest for a snapshot.
+/// Derives the fully pinned identity of the pack a snapshot builds.
 ///
 /// # Errors
 ///
 /// Returns an error when the snapshot is invalid for the edition.
-pub fn build_manifest(
+pub fn corpus_identity(
     edition: &EditionConfig,
     snapshot: &SourceSnapshot,
     builder_revision: &str,
-) -> Result<BuildManifest, SnapshotError> {
+) -> Result<CorpusIdentity, SnapshotError> {
     validate_snapshot(edition, snapshot)?;
     if builder_revision.is_empty() {
         return Err(SnapshotError(
@@ -226,7 +210,7 @@ pub fn build_manifest(
         "selected_entry_language": edition.corpus_language,
         "snapshot": snapshot,
     });
-    Ok(BuildManifest {
+    Ok(CorpusIdentity {
         pack_id: edition.pack_id.clone(),
         corpus_language: edition.corpus_language.clone(),
         wiktionary_edition: edition.wiktionary_edition.clone(),
@@ -238,21 +222,11 @@ pub fn build_manifest(
         wiktextract_revision: snapshot.wiktextract_revision.clone(),
         wikitextprocessor_revision: snapshot.wikitextprocessor_revision.clone(),
         builder_revision: builder_revision.to_owned(),
-        compression_profile: COMPRESSION_PROFILE.to_owned(),
-        routing_policy: ROUTING_POLICY.to_owned(),
         target_shard_payload_bytes: edition.target_shard_payload_bytes,
-        source_manifest_sha256: json_digest(&source_manifest),
-        source_manifest,
-        license_manifest_sha256: json_digest(&edition.license_manifest),
-        license_manifest: edition.license_manifest.clone(),
-        compatible_audio_collection: None,
+        source_manifest: source_manifest.to_string(),
+        license_manifest: edition.license_manifest.to_string(),
         minimum_app_version: edition.minimum_app_version.clone(),
     })
-}
-
-fn json_digest(value: &Value) -> Sha256Hex {
-    let json = serde_json::to_string(value).expect("JSON values serialize");
-    Sha256Hex::from_bytes(Sha256::digest(json.as_bytes()).into())
 }
 
 fn is_iso_date_prefix(value: &str) -> bool {

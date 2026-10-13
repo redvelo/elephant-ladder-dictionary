@@ -1,5 +1,4 @@
-use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -9,40 +8,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use elephant_ladder_dictionary_pack::{
-    AUDIO_MANIFEST_FILE, AudioCollection, AudioDelivery, AudioManifest, DATA_APPLICATION_ID,
-    DictionaryPack, ExpectedPack, FORMAT_VERSION, INDEX_APPLICATION_ID, PackError, PackLimits,
-    PackRevision, Sha256Hex, UNICODE_PROFILE,
+    AUDIO_MANIFEST_FILE, AudioCollection, AudioDelivery, AudioManifest, DictionaryPack,
+    ExpectedPack, Sha256Hex,
 };
 use elephant_ladder_dictionary_pack_builder::{
-    AcquireOptions, AcquisitionState, BuildManifest, BuildOptions, CatalogConfig, EditionConfig,
-    ReferenceSet, SourceSnapshot, acquire, assemble_catalog, build_manifest, build_pack, utc_now,
-    validate_snapshot,
+    AcquireOptions, AcquisitionState, AudioBuildOptions, CatalogConfig, EditionConfig,
+    ReferenceSet, SourceSnapshot, acquire, assemble_catalog, build_audio_collection, build_pack,
+    corpus_identity, utc_now, validate_snapshot,
 };
-use elephant_ladder_dictionary_pack_builder::{AudioBuildOptions, build_audio_collection};
 #[cfg(feature = "transcode")]
 use elephant_ladder_dictionary_pack_builder::{MAX_RECORDING_SECONDS, transcode_to_opus};
 use sha2::{Digest, Sha256};
 
 const PROGRESS_INTERVAL_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Reports input progress on standard error while a multi-gigabyte build runs.
 struct ProgressReader<R> {
     inner: R,
     bytes_read: Arc<AtomicU64>,
     next_report: u64,
     started_at: Instant,
     eof_reported: bool,
-}
-
-impl<R> ProgressReader<R> {
-    fn new(inner: R, bytes_read: Arc<AtomicU64>, started_at: Instant) -> Self {
-        Self {
-            inner,
-            bytes_read,
-            next_report: PROGRESS_INTERVAL_BYTES,
-            started_at,
-            eof_reported: false,
-        }
-    }
 }
 
 impl<R: Read> Read for ProgressReader<R> {
@@ -89,92 +75,94 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let mut arguments = env::args_os();
+    let mut arguments = std::env::args_os();
     let program = arguments
         .next()
         .unwrap_or_else(|| "elephant-dictionary-pack".into());
-    let Some(command) = arguments.next() else {
-        return Err(usage(&program));
-    };
-    if command == "format-version" {
-        if arguments.next().is_some() {
-            return Err(usage(&program));
+    let arguments = arguments
+        .map(|argument| argument.into_string().map_err(|_| usage(&program)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    match arguments.as_slice() {
+        [
+            "build",
+            "--edition",
+            edition,
+            "--snapshot",
+            snapshot,
+            "--builder-revision",
+            revision,
+            "--input",
+            input,
+            "--output",
+            output,
+        ] => run_build(edition, snapshot, revision, input, output),
+        ["validate", "--pack", directory] => run_validate(Path::new(directory)),
+        [
+            "source",
+            "validate",
+            "--edition",
+            edition,
+            "--snapshot",
+            snapshot,
+        ] => {
+            let edition: EditionConfig = read_json(edition)?;
+            let snapshot: SourceSnapshot = read_json(snapshot)?;
+            validate_snapshot(&edition, &snapshot).map_err(|error| error.to_string())
         }
-        print_format_version();
-        return Ok(());
-    }
-    if command == "validate" {
-        let Some(flag) = arguments.next() else {
-            return Err(usage(&program));
-        };
-        let Some(directory) = arguments.next() else {
-            return Err(usage(&program));
-        };
-        if flag != "--pack" || arguments.next().is_some() {
-            return Err(usage(&program));
-        }
-        return run_validate(PathBuf::from(directory));
-    }
-    if command == "audio" {
-        let arguments = arguments.collect::<Vec<_>>();
-        return run_audio(&program, &arguments);
-    }
-    if command == "source" {
-        let arguments = arguments.collect::<Vec<_>>();
-        return run_source(&program, &arguments);
-    }
-    if command == "catalog" {
-        let arguments = arguments.collect::<Vec<_>>();
-        return run_catalog(&program, &arguments);
-    }
-    if command != "build" {
-        return Err(usage(&program));
-    }
-
-    let mut manifest = None;
-    let mut input = None;
-    let mut output = None;
-    while let Some(flag) = arguments.next() {
-        let value = arguments.next().ok_or_else(|| {
-            format!(
-                "missing value for `{}`\n{}",
-                flag.to_string_lossy(),
-                usage(&program)
+        ["audio", rest @ ..] => run_audio(&program, rest),
+        [
+            "catalog",
+            "assemble",
+            "--config",
+            config,
+            "--output",
+            output,
+        ] => {
+            let config_path = Path::new(config);
+            let config: CatalogConfig = read_json(config)?;
+            let catalog = assemble_catalog(
+                &config,
+                config_path.parent().unwrap_or_else(|| Path::new(".")),
+                Path::new(output),
             )
-        })?;
-        match flag.to_str() {
-            Some("--manifest") if manifest.is_none() => manifest = Some(PathBuf::from(value)),
-            Some("--input") if input.is_none() => input = Some(PathBuf::from(value)),
-            Some("--output") if output.is_none() => output = Some(PathBuf::from(value)),
-            _ => return Err(usage(&program)),
+            .map_err(|error| error.to_string())?;
+            println!("catalog_revision={}", catalog.catalog_revision);
+            println!("packs={}", catalog.packs.len());
+            Ok(())
         }
+        _ => Err(usage(&program)),
     }
-    let manifest_path = manifest.ok_or_else(|| usage(&program))?;
-    let input_path = input.ok_or_else(|| usage(&program))?;
-    let output_path = output.ok_or_else(|| usage(&program))?;
-    let manifest_file = File::open(&manifest_path)
-        .map_err(|error| format!("cannot open {}: {error}", manifest_path.display()))?;
-    let manifest: BuildManifest = serde_json::from_reader(manifest_file).map_err(|error| {
-        format!(
-            "invalid build manifest {}: {error}",
-            manifest_path.display()
-        )
-    })?;
+}
+
+fn run_build(
+    edition: &str,
+    snapshot: &str,
+    revision: &str,
+    input: &str,
+    output: &str,
+) -> Result<(), String> {
+    let edition: EditionConfig = read_json(edition)?;
+    let snapshot: SourceSnapshot = read_json(snapshot)?;
+    let identity =
+        corpus_identity(&edition, &snapshot, revision).map_err(|error| error.to_string())?;
     let stdin = io::stdin();
-    let source: Box<dyn Read> = if input_path == OsStr::new("-") {
+    let source: Box<dyn Read> = if input == "-" {
         Box::new(stdin.lock())
     } else {
-        Box::new(
-            File::open(&input_path)
-                .map_err(|error| format!("cannot open {}: {error}", input_path.display()))?,
-        )
+        Box::new(File::open(input).map_err(|error| format!("cannot open {input}: {error}"))?)
     };
     let started_at = Instant::now();
     let bytes_read = Arc::new(AtomicU64::new(0));
-    eprintln!("build started: output={}", output_path.display());
-    let source = ProgressReader::new(source, Arc::clone(&bytes_read), started_at);
-    let result = build_pack(&manifest, source, &output_path, BuildOptions::default())
-        .map_err(|error| error.to_string())?;
+    eprintln!("build started: output={output}");
+    let source = ProgressReader {
+        inner: source,
+        bytes_read: Arc::clone(&bytes_read),
+        next_report: PROGRESS_INTERVAL_BYTES,
+        started_at,
+        eof_reported: false,
+    };
+    let result = build_pack(&identity, source, output).map_err(|error| error.to_string())?;
     eprintln!(
         "build completed: input_bytes={} elapsed_seconds={:.1}",
         bytes_read.load(Ordering::Relaxed),
@@ -182,14 +170,19 @@ fn run() -> Result<(), String> {
     );
     println!("pack_revision={}", result.pack_revision);
     println!("output={}", result.output_directory.display());
+    println!("source_records={}", result.source_record_count);
+    println!("source_bytes={}", result.source_bytes);
+    println!("selected_records={}", result.manifest.selected_record_count);
+    println!("selected_bytes={}", result.manifest.selected_record_bytes);
+    println!("compressed_bytes={}", result.compressed_payload_bytes);
+    println!("lookup_rows={}", result.lookup_row_count);
     Ok(())
 }
 
-fn run_validate(directory: PathBuf) -> Result<(), String> {
+fn run_validate(directory: &Path) -> Result<(), String> {
     let started_at = Instant::now();
     eprintln!("validation started: pack={}", directory.display());
-    let pack = DictionaryPack::open(directory, PackLimits::default())
-        .map_err(|error| error.to_string())?;
+    let pack = DictionaryPack::open(directory).map_err(|error| error.to_string())?;
     let report = pack.validate_all().map_err(|error| error.to_string())?;
     eprintln!(
         "validation completed: elapsed_seconds={:.1}",
@@ -212,12 +205,8 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
     serde_json::from_reader(file).map_err(|error| format!("invalid JSON in {path}: {error}"))
 }
 
-fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), String> {
-    let arguments = arguments
-        .iter()
-        .map(|argument| argument.to_str().ok_or_else(|| usage(program)))
-        .collect::<Result<Vec<_>, _>>()?;
-    match arguments.as_slice() {
+fn run_audio(program: &OsStr, arguments: &[&str]) -> Result<(), String> {
+    match arguments {
         ["references", "--pack", pack, "--output", output] => audio_references(pack, output),
         [
             "acquire",
@@ -234,7 +223,19 @@ fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), St
                 ["--shard", value] => Some(parse_shard(value)?),
                 _ => return Err(usage(program)),
             };
-            run_acquire(references, state, contact, shard)
+            let references: ReferenceSet = read_json(references)?;
+            let state = AcquisitionState::open_or_create(Path::new(state), &references, &utc_now())
+                .map_err(|error| error.to_string())?;
+            let options = AcquireOptions {
+                shard,
+                ..AcquireOptions::commons(contact)
+            };
+            let report = acquire(&state, &options).map_err(|error| error.to_string())?;
+            for (phase, count) in report.phases {
+                println!("{phase}={count}");
+            }
+            println!("completed={}", report.completed);
+            Ok(())
         }
         [
             "build",
@@ -253,33 +254,27 @@ fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), St
                 ["--index-only"] => AudioDelivery::Remote,
                 _ => return Err(usage(program)),
             };
-            run_audio_build(state, edition, revision, output, delivery)
-        }
-        ["validate", "--collection", collection] => {
-            let directory = Path::new(collection);
-            let manifest_bytes = std::fs::read(directory.join(AUDIO_MANIFEST_FILE))
-                .map_err(|error| format!("cannot read audio manifest: {error}"))?;
-            let manifest: AudioManifest = serde_json::from_slice(&manifest_bytes)
-                .map_err(|error| format!("invalid audio manifest: {error}"))?;
-            let expected = ExpectedPack {
-                pack_id: manifest
-                    .pack_id
-                    .parse()
-                    .map_err(|error: PackError| error.to_string())?,
-                pack_revision: PackRevision::from_bytes(*manifest.pack_revision.as_bytes()),
-                manifest_sha256: Sha256Hex::from_bytes(Sha256::digest(&manifest_bytes).into()),
+            let edition: EditionConfig = read_json(edition)?;
+            let audio = edition
+                .audio
+                .ok_or_else(|| "edition has no audio configuration".to_owned())?;
+            let state =
+                AcquisitionState::open(Path::new(state)).map_err(|error| error.to_string())?;
+            let options = AudioBuildOptions {
+                builder_revision: (*revision).to_owned(),
+                minimum_app_version: edition.minimum_app_version,
+                workers: std::thread::available_parallelism().map_or(1, usize::from),
+                delivery,
             };
-            let collection = AudioCollection::verify(directory, &expected, PackLimits::default())
+            let result = build_audio_collection(&state, &audio, &options, Path::new(output))
                 .map_err(|error| error.to_string())?;
-            let report = collection
-                .validate_all()
-                .map_err(|error| error.to_string())?;
-            println!("recording_count={}", report.recording_count);
-            println!("available_count={}", report.available_count);
-            println!("blob_count={}", report.blob_count);
-            println!("blob_bytes={}", report.blob_bytes);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).map_err(|error| error.to_string())?
+            );
             Ok(())
         }
+        ["validate", "--collection", collection] => audio_validate(Path::new(collection)),
         #[cfg(feature = "transcode")]
         ["transcode", "--input", input, "--output", output] => {
             let source =
@@ -301,13 +296,12 @@ fn run_audio(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), St
 }
 
 fn audio_references(pack: &str, output: &str) -> Result<(), String> {
-    let pack =
-        DictionaryPack::open(pack, PackLimits::default()).map_err(|error| error.to_string())?;
+    let pack = DictionaryPack::open(pack).map_err(|error| error.to_string())?;
     let references = pack.audio_references().map_err(|error| error.to_string())?;
     let set = ReferenceSet {
         schema_version: 1,
-        corpus_pack_id: pack.pack_id().as_str().to_owned(),
-        corpus_revision: Sha256Hex::from_bytes(*pack.pack_revision().as_bytes()),
+        corpus_pack_id: pack.pack_id().clone(),
+        corpus_revision: *pack.pack_revision(),
         corpus_language: pack.corpus_language().to_owned(),
         files: references.files.into_iter().collect(),
         invalid: references.invalid.into_iter().collect(),
@@ -320,57 +314,25 @@ fn audio_references(pack: &str, output: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn run_source(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), String> {
-    let arguments = arguments
-        .iter()
-        .map(|argument| argument.to_str().ok_or_else(|| usage(program)))
-        .collect::<Result<Vec<_>, _>>()?;
-    match arguments.as_slice() {
-        ["validate", "--edition", edition, "--snapshot", snapshot] => {
-            let edition: EditionConfig = read_json(edition)?;
-            let snapshot: SourceSnapshot = read_json(snapshot)?;
-            validate_snapshot(&edition, &snapshot).map_err(|error| error.to_string())
-        }
-        [
-            "manifest",
-            "--edition",
-            edition,
-            "--snapshot",
-            snapshot,
-            "--builder-revision",
-            revision,
-        ] => {
-            let edition: EditionConfig = read_json(edition)?;
-            let snapshot: SourceSnapshot = read_json(snapshot)?;
-            let manifest =
-                build_manifest(&edition, &snapshot, revision).map_err(|error| error.to_string())?;
-            let json =
-                serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?;
-            println!("{json}");
-            Ok(())
-        }
-        _ => Err(usage(program)),
-    }
-}
-
-fn run_acquire(
-    references: &str,
-    state: &str,
-    contact: &str,
-    shard: Option<(u32, u32)>,
-) -> Result<(), String> {
-    let references: ReferenceSet = read_json(references)?;
-    let state = AcquisitionState::open_or_create(Path::new(state), &references, &utc_now())
-        .map_err(|error| error.to_string())?;
-    let options = AcquireOptions {
-        shard,
-        ..AcquireOptions::commons(contact)
+fn audio_validate(directory: &Path) -> Result<(), String> {
+    let manifest_bytes = std::fs::read(directory.join(AUDIO_MANIFEST_FILE))
+        .map_err(|error| format!("cannot read audio manifest: {error}"))?;
+    let manifest: AudioManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| format!("invalid audio manifest: {error}"))?;
+    let expected = ExpectedPack {
+        pack_id: manifest.pack_id,
+        pack_revision: manifest.pack_revision,
+        manifest_sha256: Sha256Hex::from_bytes(Sha256::digest(&manifest_bytes).into()),
     };
-    let report = acquire(&state, &options).map_err(|error| error.to_string())?;
-    for (phase, count) in report.phases {
-        println!("{phase}={count}");
-    }
-    println!("completed={}", report.completed);
+    let collection =
+        AudioCollection::verify(directory, &expected).map_err(|error| error.to_string())?;
+    let report = collection
+        .validate_all()
+        .map_err(|error| error.to_string())?;
+    println!("recording_count={}", report.recording_count);
+    println!("available_count={}", report.available_count);
+    println!("blob_count={}", report.blob_count);
+    println!("blob_bytes={}", report.blob_bytes);
     Ok(())
 }
 
@@ -386,69 +348,14 @@ fn parse_shard(value: &str) -> Result<(u32, u32), String> {
     Ok((ordinal, total))
 }
 
-fn run_catalog(program: &OsStr, arguments: &[std::ffi::OsString]) -> Result<(), String> {
-    let arguments = arguments
-        .iter()
-        .map(|argument| argument.to_str().ok_or_else(|| usage(program)))
-        .collect::<Result<Vec<_>, _>>()?;
-    match arguments.as_slice() {
-        ["assemble", "--config", config, "--output", output] => {
-            let config_path = Path::new(config);
-            let file = File::open(config_path)
-                .map_err(|error| format!("cannot open {config}: {error}"))?;
-            let config: CatalogConfig = serde_json::from_reader(file)
-                .map_err(|error| format!("invalid catalog config {config}: {error}"))?;
-            let catalog = assemble_catalog(
-                &config,
-                config_path.parent().unwrap_or_else(|| Path::new(".")),
-                Path::new(output),
-            )
-            .map_err(|error| error.to_string())?;
-            println!("catalog_revision={}", catalog.catalog_revision);
-            println!("packs={}", catalog.packs.len());
-            Ok(())
-        }
-        _ => Err(usage(program)),
-    }
-}
-
-fn print_format_version() {
-    println!("format_version={FORMAT_VERSION}");
-    println!("index_application_id={INDEX_APPLICATION_ID:#010x}");
-    println!("data_application_id={DATA_APPLICATION_ID:#010x}");
-    println!("unicode_profile={UNICODE_PROFILE}");
-}
-
-fn run_audio_build(
-    state: &str,
-    edition: &str,
-    revision: &str,
-    output: &str,
-    delivery: AudioDelivery,
-) -> Result<(), String> {
-    let edition: EditionConfig = read_json(edition)?;
-    let audio = edition
-        .audio
-        .ok_or_else(|| "edition has no audio configuration".to_owned())?;
-    let state = AcquisitionState::open(Path::new(state)).map_err(|error| error.to_string())?;
-    let options = AudioBuildOptions {
-        builder_revision: revision.to_owned(),
-        minimum_app_version: edition.minimum_app_version,
-        workers: std::thread::available_parallelism().map_or(1, usize::from),
-        delivery,
-    };
-    let result = build_audio_collection(&state, &audio, &options, Path::new(output))
-        .map_err(|error| error.to_string())?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&result).map_err(|error| error.to_string())?
+fn usage(program: &OsStr) -> String {
+    let program = PathBuf::from(program);
+    let program = program.file_name().map_or_else(
+        || OsString::from("elephant-dictionary-pack"),
+        OsStr::to_os_string,
     );
-    Ok(())
-}
-
-fn usage(program: &std::ffi::OsStr) -> String {
     format!(
-        "usage: {program} format-version\n       {program} build --manifest MANIFEST.json --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --contact URL_OR_EMAIL [--shard ORDINAL/TOTAL]\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY [--index-only]\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} source manifest --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n\n`--input -` reads decompressed JSONL from standard input.",
+        "usage: {program} build --edition EDITION.json --snapshot SNAPSHOT.json --builder-revision REVISION --input SOURCE.jsonl|- --output DIRECTORY\n       {program} validate --pack DIRECTORY\n       {program} source validate --edition EDITION.json --snapshot SNAPSHOT.json\n       {program} audio references --pack CORPUS_DIRECTORY --output REFERENCES.json\n       {program} audio acquire --references REFERENCES.json --state DIRECTORY --contact URL_OR_EMAIL [--shard ORDINAL/TOTAL]\n       {program} audio build --state DIRECTORY --edition EDITION.json --builder-revision REVISION --output COLLECTION_DIRECTORY [--index-only]\n       {program} audio validate --collection COLLECTION_DIRECTORY\n       {program} audio transcode --input SOURCE --output RECORDING.opus\n       {program} catalog assemble --config CATALOG_CONFIG.json --output RELEASE_DIRECTORY\n\n`--input -` reads decompressed JSONL from standard input.",
         program = program.to_string_lossy(),
     )
 }

@@ -9,7 +9,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-arc-swap.workspace = true
 hex.workspace = true
 icu_casemap.workspace = true
 icu_normalizer.workspace = true

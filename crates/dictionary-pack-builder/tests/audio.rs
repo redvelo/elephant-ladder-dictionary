@@ -2,9 +2,11 @@
 //! the whole file is skipped when the crate is built without the transcode feature.
 #![cfg(feature = "transcode")]
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,66 +15,51 @@ use std::time::Duration;
 
 use elephant_ladder_dictionary_pack::{
     AUDIO_MANIFEST_FILE, AudioCollection, AudioDelivery, CatalogPack, DictionaryPack, ExpectedPack,
-    PackLimits, PackRevision, RecordingStatus, Sha256Hex, opus_duration_ms,
+    PackRevision, RecordingStatus, opus_duration_ms,
 };
 use elephant_ladder_dictionary_pack_builder::{
-    AcquireOptions, AcquisitionState, AudioBuildOptions, AudioBuildResult, AudioConfig,
-    AudioEditionConfig, BuildManifest, BuildOptions, CatalogConfig, Phase, ReferenceSet, acquire,
-    assemble_catalog, build_audio_collection, build_pack,
+    AcquireOptions, AcquisitionState, AudioBuildOptions, AudioBuildResult, AudioEditionConfig,
+    CatalogConfig, Phase, ReferenceSet, acquire, assemble_catalog, build_audio_collection,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use sha1::Digest as _;
 
 fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/audio")
+    common::fixtures().join("audio")
 }
 
-fn digest(bytes: &[u8]) -> Sha256Hex {
-    Sha256Hex::from_bytes(Sha256::digest(bytes).into())
-}
+const CORPUS: &str = concat!(
+    "{\"lang_code\":\"en\",\"word\":\"cubi\",\"sounds\":[{\"audio\":\"LL-Q150_(fra)-Antochkat-cubi.wav\"}]}\n",
+    "{\"lang_code\":\"en\",\"word\":\"abate\",\"sounds\":[{\"audio\":\"En-us-abate-old.oga\"},",
+    "{\"audio\":\"En-us-modicum.mp3\"}]}\n",
+    "{\"lang_code\":\"en\",\"word\":\"locative\",\"sounds\":[{\"audio\":\"En-in-locative.opus\"},",
+    "{\"audio\":\"not a file\"}]}\n",
+    "{\"lang_code\":\"en\",\"word\":\"gone\",\"sounds\":[{\"audio\":\"En-us-gone.ogg\"},",
+    "{\"audio\":\"En-us-restricted.ogg\"},{\"audio\":\"En-us-corrupt.ogg\"}]}\n",
+);
 
 fn build_corpus(directory: &Path) -> DictionaryPack {
-    let source = concat!(
-        "{\"lang_code\":\"en\",\"word\":\"cubi\",\"sounds\":[{\"audio\":\"LL-Q150_(fra)-Antochkat-cubi.wav\"}]}\n",
-        "{\"lang_code\":\"en\",\"word\":\"abate\",\"sounds\":[{\"audio\":\"En-us-abate-old.oga\"},",
-        "{\"audio\":\"En-us-modicum.mp3\"}]}\n",
-        "{\"lang_code\":\"en\",\"word\":\"locative\",\"sounds\":[{\"audio\":\"En-in-locative.opus\"},",
-        "{\"audio\":\"not a file\"}]}\n",
-        "{\"lang_code\":\"en\",\"word\":\"gone\",\"sounds\":[{\"audio\":\"En-us-gone.ogg\"},",
-        "{\"audio\":\"En-us-restricted.ogg\"},{\"audio\":\"En-us-corrupt.ogg\"}]}\n",
-    );
-    let source_manifest = json!({"provider":"audio-fixture"});
-    let license_manifest = json!({"licenses":[{"spdx":"CC0-1.0"}]});
-    let manifest = BuildManifest {
-        pack_id: "wiktionary-en-en".to_owned(),
+    common::build_into(directory, "en", CORPUS.as_bytes(), 1_000_000);
+    DictionaryPack::open(directory).unwrap()
+}
+
+fn reference_set(corpus: &DictionaryPack) -> ReferenceSet {
+    let references = corpus.audio_references().unwrap();
+    ReferenceSet {
+        schema_version: 1,
+        corpus_pack_id: corpus.pack_id().clone(),
+        corpus_revision: *corpus.pack_revision(),
         corpus_language: "en".to_owned(),
-        wiktionary_edition: "enwiktionary".to_owned(),
-        wiktionary_dump_date: "2026-09-02".to_owned(),
-        kaikki_extraction_date: "2026-09-09".to_owned(),
-        source_url: "https://example.invalid/source.jsonl.gz".to_owned(),
-        compressed_source_sha256: digest(b"compressed"),
-        uncompressed_source_sha256: digest(source.as_bytes()),
-        wiktextract_revision: "wiktextract".to_owned(),
-        wikitextprocessor_revision: "wikitextprocessor".to_owned(),
-        builder_revision: "builder".to_owned(),
-        compression_profile: "zstd-v1-level-6".to_owned(),
-        routing_policy: "routing-v1".to_owned(),
-        target_shard_payload_bytes: 1_000_000,
-        source_manifest_sha256: digest(&serde_json::to_vec(&source_manifest).unwrap()),
-        source_manifest,
-        license_manifest_sha256: digest(&serde_json::to_vec(&license_manifest).unwrap()),
-        license_manifest,
-        compatible_audio_collection: None,
-        minimum_app_version: "0.1.0".to_owned(),
-    };
-    build_pack(
-        &manifest,
-        Cursor::new(source),
-        directory,
-        BuildOptions::default(),
-    )
-    .unwrap();
-    DictionaryPack::open(directory, PackLimits::default()).unwrap()
+        files: references.files.into_iter().collect(),
+        invalid: references.invalid.into_iter().collect(),
+    }
+}
+
+fn audio_edition(chunk_count: u64) -> AudioEditionConfig {
+    AudioEditionConfig {
+        pack_id: "wiktionary-en-audio".parse().unwrap(),
+        chunk_count,
+    }
 }
 
 struct FakeCommons {
@@ -248,15 +235,8 @@ fn expected(directory: &Path) -> ExpectedPack {
     let manifest: Value = serde_json::from_slice(&manifest_bytes).unwrap();
     ExpectedPack {
         pack_id: manifest["pack_id"].as_str().unwrap().parse().unwrap(),
-        pack_revision: PackRevision::from_bytes(
-            *manifest["pack_revision"]
-                .as_str()
-                .unwrap()
-                .parse::<Sha256Hex>()
-                .unwrap()
-                .as_bytes(),
-        ),
-        manifest_sha256: digest(&manifest_bytes),
+        pack_revision: manifest["pack_revision"].as_str().unwrap().parse().unwrap(),
+        manifest_sha256: common::digest(&manifest_bytes),
     }
 }
 
@@ -331,22 +311,15 @@ fn assert_recordings(collection: &AudioCollection) {
 fn acquisition_build_and_runtime_cover_every_recording_status() {
     let temporary = tempfile::tempdir().unwrap();
     let corpus = build_corpus(&temporary.path().join("corpus"));
-    let references = corpus.audio_references().unwrap();
-    assert_eq!(references.files.len(), 7);
-    assert_eq!(references.invalid.get("not a file"), Some(&1));
+    let reference_set = reference_set(&corpus);
+    assert_eq!(reference_set.files.len(), 7);
+    assert_eq!(reference_set.invalid, [("not a file".to_owned(), 1)]);
     assert!(
-        references
+        reference_set
             .files
-            .contains_key("LL-Q150 (fra)-Antochkat-cubi.wav")
+            .iter()
+            .any(|(name, _)| name == "LL-Q150 (fra)-Antochkat-cubi.wav")
     );
-    let reference_set = ReferenceSet {
-        schema_version: 1,
-        corpus_pack_id: corpus.pack_id().as_str().to_owned(),
-        corpus_revision: Sha256Hex::from_bytes(*corpus.pack_revision().as_bytes()),
-        corpus_language: "en".to_owned(),
-        files: references.files.into_iter().collect(),
-        invalid: references.invalid.into_iter().collect(),
-    };
 
     let commons = fake_commons();
     let options = AcquireOptions {
@@ -371,10 +344,7 @@ fn acquisition_build_and_runtime_cover_every_recording_status() {
         AcquisitionState::open_or_create(&state_directory, &reference_set, "ignored").unwrap();
     assert!(acquire(&resumed, &options).unwrap().completed);
 
-    let audio = AudioEditionConfig {
-        pack_id: "wiktionary-en-audio".to_owned(),
-        chunk_count: 4,
-    };
+    let audio = audio_edition(4);
     let build_options = AudioBuildOptions {
         builder_revision: "builder-a".to_owned(),
         minimum_app_version: "0.1.0".to_owned(),
@@ -404,8 +374,7 @@ fn acquisition_build_and_runtime_cover_every_recording_status() {
         );
     }
 
-    let collection =
-        AudioCollection::verify(&first, &expected(&first), PackLimits::default()).unwrap();
+    let collection = AudioCollection::verify(&first, &expected(&first)).unwrap();
     let validation = collection.validate_all().unwrap();
     assert_eq!(
         (validation.recording_count, validation.available_count),
@@ -430,22 +399,13 @@ fn acquisition_build_and_runtime_cover_every_recording_status() {
         expected(&first).pack_revision
     );
     assert_eq!(chunk_names(&rebuilt), chunk_names(&first));
-    AudioCollection::open_installed(&rebuilt, &expected(&rebuilt), PackLimits::default()).unwrap();
+    AudioCollection::open_installed(&rebuilt, &expected(&rebuilt)).unwrap();
 }
 
-/// A remote collection built from an acquisition whose originals were never downloaded.
 /// A new acquisition of the fixture corpus against a fake Commons.
 fn fresh_acquisition(root: &Path) -> (AcquisitionState, AcquireOptions, FakeCommons) {
     let corpus = build_corpus(&root.join("corpus"));
-    let references = corpus.audio_references().unwrap();
-    let reference_set = ReferenceSet {
-        schema_version: 1,
-        corpus_pack_id: corpus.pack_id().as_str().to_owned(),
-        corpus_revision: Sha256Hex::from_bytes(*corpus.pack_revision().as_bytes()),
-        corpus_language: "en".to_owned(),
-        files: references.files.into_iter().collect(),
-        invalid: references.invalid.into_iter().collect(),
-    };
+    let reference_set = reference_set(&corpus);
     let commons = fake_commons();
     let options = AcquireOptions {
         api_url: commons.url.clone(),
@@ -475,10 +435,7 @@ fn remote_collection(temporary: &Path) -> (AudioBuildResult, PathBuf) {
                 .unwrap();
         }
     }
-    let audio = AudioEditionConfig {
-        pack_id: "wiktionary-en-audio".to_owned(),
-        chunk_count: 4,
-    };
+    let audio = audio_edition(4);
     let directory = temporary.join("remote");
     let result = build_audio_collection(
         &state,
@@ -539,9 +496,12 @@ fn index_only_collections_carry_facts_without_audio_and_build_before_downloads()
     assert_eq!(names.len(), 2, "{names:?}");
     assert!(names.iter().all(|name| !name.contains("-chunk-")));
 
-    let collection =
-        AudioCollection::verify(&directory, &expected(&directory), PackLimits::default()).unwrap();
+    let collection = AudioCollection::verify(&directory, &expected(&directory)).unwrap();
     assert_eq!(collection.metadata().delivery, AudioDelivery::Remote);
+    assert_eq!(
+        collection.pack_revision(),
+        &expected(&directory).pack_revision
+    );
     assert_eq!(collection.metadata().chunk_count, 0);
     let report = collection.validate_all().unwrap();
     assert_eq!(
@@ -575,10 +535,7 @@ fn remote_collections_are_catalogued_with_their_delivery() {
             generated_at: "2026-09-21T00:00:00Z".to_owned(),
             release_base_url: "https://github.com/example/packs/releases/download/r".to_owned(),
             corpora: Vec::new(),
-            audio: vec![AudioConfig {
-                directory: "remote".into(),
-                release_base_url: None,
-            }],
+            audio: vec!["remote".into()],
         },
         temporary.path(),
         &temporary.path().join("release"),
@@ -606,27 +563,14 @@ fn remote_collections_are_catalogued_with_their_delivery() {
         .collect();
     assert_eq!(names.len(), 2);
     assert!(names.contains(&AUDIO_MANIFEST_FILE));
-    AudioCollection::verify(
-        &directory,
-        &catalog.packs[0].expected_pack(),
-        PackLimits::default(),
-    )
-    .unwrap();
+    AudioCollection::verify(&directory, &catalog.packs[0].expected_pack()).unwrap();
 }
 
 #[test]
 fn installed_collections_reject_identity_changes_and_tampered_recordings() {
     let temporary = tempfile::tempdir().unwrap();
     let corpus = build_corpus(&temporary.path().join("corpus"));
-    let references = corpus.audio_references().unwrap();
-    let reference_set = ReferenceSet {
-        schema_version: 1,
-        corpus_pack_id: corpus.pack_id().as_str().to_owned(),
-        corpus_revision: Sha256Hex::from_bytes(*corpus.pack_revision().as_bytes()),
-        corpus_language: "en".to_owned(),
-        files: references.files.into_iter().collect(),
-        invalid: Vec::new(),
-    };
+    let reference_set = reference_set(&corpus);
     let commons = fake_commons();
     let state = AcquisitionState::open_or_create(
         &temporary.path().join("acquisition"),
@@ -646,10 +590,7 @@ fn installed_collections_reject_identity_changes_and_tampered_recordings() {
     let directory = temporary.path().join("collection");
     build_audio_collection(
         &state,
-        &AudioEditionConfig {
-            pack_id: "wiktionary-en-audio".to_owned(),
-            chunk_count: 1,
-        },
+        &audio_edition(1),
         &AudioBuildOptions {
             builder_revision: "builder".to_owned(),
             minimum_app_version: "0.1.0".to_owned(),
@@ -665,7 +606,7 @@ fn installed_collections_reject_identity_changes_and_tampered_recordings() {
         pack_revision: PackRevision::from_bytes([1; 32]),
         ..expected.clone()
     };
-    assert!(AudioCollection::open_installed(&directory, &wrong, PackLimits::default()).is_err());
+    assert!(AudioCollection::open_installed(&directory, &wrong).is_err());
 
     let chunk = directory.join(&chunk_names(&directory)[0]);
     let connection = rusqlite::Connection::open(&chunk).unwrap();
@@ -684,9 +625,8 @@ fn installed_collections_reject_identity_changes_and_tampered_recordings() {
         .unwrap();
     connection.close().unwrap();
 
-    assert!(AudioCollection::verify(&directory, &expected, PackLimits::default()).is_err());
-    let installed =
-        AudioCollection::open_installed(&directory, &expected, PackLimits::default()).unwrap();
+    assert!(AudioCollection::verify(&directory, &expected).is_err());
+    let installed = AudioCollection::open_installed(&directory, &expected).unwrap();
     assert!(installed.validate_all().is_err());
 }
 
@@ -714,8 +654,8 @@ fn persistent_rate_limits_stop_the_run_and_leave_files_resumable() {
     let temporary = tempfile::tempdir().unwrap();
     let references = ReferenceSet {
         schema_version: 1,
-        corpus_pack_id: "wiktionary-en-en".to_owned(),
-        corpus_revision: digest(b"corpus"),
+        corpus_pack_id: "wiktionary-en-en".parse().unwrap(),
+        corpus_revision: PackRevision::from_bytes([3; 32]),
         corpus_language: "en".to_owned(),
         files: vec![("En-us-run.ogg".to_owned(), 1)],
         invalid: Vec::new(),
@@ -745,7 +685,7 @@ fn persistent_rate_limits_stop_the_run_and_leave_files_resumable() {
     assert_eq!(requests.load(Ordering::SeqCst), 4);
     assert_eq!(
         state
-            .names_in_phase(elephant_ladder_dictionary_pack_builder::Phase::Pending, 10)
+            .names_in_phase_after(Phase::Pending, None, 10)
             .unwrap(),
         ["En-us-run.ogg"]
     );
@@ -766,5 +706,5 @@ fn commons_options_follow_the_wikimedia_robot_policy() {
     );
     assert_eq!(options.download_workers, 2);
     assert_eq!(options.download_bytes_per_second * 8, 25_000_000);
-    assert_eq!(options.server_error_pause, Duration::from_secs(900));
+    assert_eq!(options.server_error_pause, Duration::from_mins(15));
 }

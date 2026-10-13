@@ -4,7 +4,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::BuildError;
-use elephant_ladder_dictionary_pack::{RecordingLicense, Sha256Hex};
+use crate::builder::{io_error, sql_i64};
+use elephant_ladder_dictionary_pack::{PackId, PackRevision, RecordingLicense};
 
 const STATE_FILE: &str = "acquisition.sqlite";
 const ORIGINALS_DIRECTORY: &str = "originals";
@@ -47,8 +48,8 @@ CREATE INDEX files_phase ON files (phase, file_name);
 #[serde(deny_unknown_fields)]
 pub struct ReferenceSet {
     pub schema_version: u32,
-    pub corpus_pack_id: String,
-    pub corpus_revision: Sha256Hex,
+    pub corpus_pack_id: PackId,
+    pub corpus_revision: PackRevision,
     pub corpus_language: String,
     /// Normalized Commons file names with referencing sound counts, sorted by name.
     pub files: Vec<(String, u64)>,
@@ -85,7 +86,7 @@ impl Phase {
             "missing" => Self::Missing,
             "failed" => Self::Failed,
             other => {
-                return Err(BuildError::InvalidManifest(format!(
+                return Err(BuildError::Invalid(format!(
                     "unknown acquisition phase `{other}`"
                 )));
             }
@@ -118,8 +119,18 @@ pub struct FileState {
     pub reference_count: u64,
     pub phase: Phase,
     pub reason: Option<String>,
-    pub attempts: u64,
     pub facts: Option<CommonsFacts>,
+}
+
+/// The corpus an acquisition collects for, and when it ran.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcquisitionMetadata {
+    pub corpus_pack_id: PackId,
+    pub corpus_revision: PackRevision,
+    pub corpus_language: String,
+    pub started_at: String,
+    /// Set once no file remains pending or resolved.
+    pub completed_at: Option<String>,
 }
 
 /// A resumable acquisition directory.
@@ -141,9 +152,8 @@ impl AcquisitionState {
     ) -> Result<Self, BuildError> {
         let path = directory.join(STATE_FILE);
         let exists = path.exists();
-        std::fs::create_dir_all(directory.join(ORIGINALS_DIRECTORY)).map_err(|source| {
-            crate::builder::io_error("create acquisition directory", directory, source)
-        })?;
+        std::fs::create_dir_all(directory.join(ORIGINALS_DIRECTORY))
+            .map_err(|source| io_error("create acquisition directory", directory, source))?;
         let mut connection = Connection::open(&path)?;
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         if exists {
@@ -151,17 +161,16 @@ impl AcquisitionState {
                 directory: directory.to_owned(),
                 connection,
             };
-            let (pack, revision, count): (String, String, i64) = state.connection.query_row(
-                "SELECT corpus_pack_id, corpus_revision, (SELECT count(*) FROM files) \
-                 FROM acquisition_metadata",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?;
-            if pack != references.corpus_pack_id
-                || revision != references.corpus_revision.to_hex()
-                || usize::try_from(count).ok() != Some(references.files.len())
+            let metadata = state.metadata()?;
+            let count: usize =
+                state
+                    .connection
+                    .query_row("SELECT count(*) FROM files", [], |row| row.get(0))?;
+            if metadata.corpus_pack_id != references.corpus_pack_id
+                || metadata.corpus_revision != references.corpus_revision
+                || count != references.files.len()
             {
-                return Err(BuildError::InvalidManifest(
+                return Err(BuildError::Invalid(
                     "acquisition state belongs to different references".to_owned(),
                 ));
             }
@@ -174,7 +183,7 @@ impl AcquisitionState {
              (singleton, corpus_pack_id, corpus_revision, corpus_language, started_at) \
              VALUES (1, ?1, ?2, ?3, ?4)",
             params![
-                references.corpus_pack_id,
+                references.corpus_pack_id.as_str(),
                 references.corpus_revision.to_hex(),
                 references.corpus_language,
                 started_at
@@ -185,10 +194,7 @@ impl AcquisitionState {
                 "INSERT INTO files (file_name, reference_count, phase) VALUES (?1, ?2, 'pending')",
             )?;
             for (file_name, count) in &references.files {
-                insert.execute(params![
-                    file_name,
-                    crate::builder::sql_i64("reference count", *count)?
-                ])?;
+                insert.execute(params![file_name, sql_i64("reference count", *count)?])?;
             }
         }
         transaction.commit()?;
@@ -206,7 +212,7 @@ impl AcquisitionState {
     pub fn open(directory: &Path) -> Result<Self, BuildError> {
         let path = directory.join(STATE_FILE);
         if !path.is_file() {
-            return Err(BuildError::InvalidManifest(format!(
+            return Err(BuildError::Invalid(format!(
                 "no acquisition state in {}",
                 directory.display()
             )));
@@ -223,13 +229,17 @@ impl AcquisitionState {
         original_path(&self.directory, sha1)
     }
 
-    /// Corpus identity and acquisition times.
-    ///
     /// # Errors
     ///
     /// Returns storage errors.
-    pub fn metadata(&self) -> Result<(String, String, String, String, Option<String>), BuildError> {
-        Ok(self.connection.query_row(
+    pub fn metadata(&self) -> Result<AcquisitionMetadata, BuildError> {
+        let (pack_id, revision, corpus_language, started_at, completed_at): (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+        ) = self.connection.query_row(
             "SELECT corpus_pack_id, corpus_revision, corpus_language, started_at, completed_at \
              FROM acquisition_metadata",
             [],
@@ -242,16 +252,16 @@ impl AcquisitionState {
                     row.get(4)?,
                 ))
             },
-        )?)
-    }
-
-    /// File names in `phase`, in name order, at most `limit`.
-    ///
-    /// # Errors
-    ///
-    /// Returns storage errors.
-    pub fn names_in_phase(&self, phase: Phase, limit: usize) -> Result<Vec<String>, BuildError> {
-        self.names_in_phase_after(phase, None, limit)
+        )?;
+        Ok(AcquisitionMetadata {
+            corpus_pack_id: pack_id.parse()?,
+            corpus_revision: revision
+                .parse()
+                .map_err(|message: &str| BuildError::Invalid(message.to_owned()))?,
+            corpus_language,
+            started_at,
+            completed_at,
+        })
     }
 
     /// Names in one phase after `cursor`, so a caller can walk the whole phase in order.
@@ -320,7 +330,7 @@ impl AcquisitionState {
                 facts.sha1,
                 facts.timestamp,
                 facts.media_type,
-                crate::builder::sql_i64("size", facts.size_bytes)?,
+                sql_i64("size", facts.size_bytes)?,
                 facts.description_url,
                 facts.original_url,
                 facts.license_short_name,
@@ -363,7 +373,7 @@ impl AcquisitionState {
         let changed = self.connection.execute(
             "UPDATE files SET phase = CASE WHEN sha1 IS NULL THEN 'pending' ELSE 'resolved' END, \
              reason = NULL WHERE phase = 'failed' AND attempts < ?1",
-            [crate::builder::sql_i64("attempts", max_attempts)?],
+            [sql_i64("attempts", max_attempts)?],
         )?;
         Ok(changed as u64)
     }
@@ -415,79 +425,76 @@ impl AcquisitionState {
     }
 }
 
-const FILE_SELECT: &str = "SELECT file_name, reference_count, phase, reason, attempts, title, sha1, \
+const FILE_SELECT: &str = "SELECT file_name, reference_count, phase, reason, title, sha1, \
      timestamp, media_type, size_bytes, description_url, original_url, license_short_name, \
      license_identifier, license_url, artist_html, attribution_required, restrictions FROM files";
 
-type RawFile = (
-    String,
-    i64,
-    String,
-    Option<String>,
-    i64,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<bool>,
-    Option<String>,
-);
+struct RawFile {
+    file_name: String,
+    reference_count: u64,
+    phase: String,
+    reason: Option<String>,
+    title: Option<String>,
+    sha1: Option<String>,
+    timestamp: Option<String>,
+    media_type: Option<String>,
+    size_bytes: Option<u64>,
+    description_url: Option<String>,
+    original_url: Option<String>,
+    license_short_name: Option<String>,
+    license_identifier: Option<String>,
+    license_url: Option<String>,
+    artist_html: Option<String>,
+    attribution_required: Option<bool>,
+    restrictions: Option<String>,
+}
 
 fn raw_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawFile> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-        row.get(7)?,
-        row.get(8)?,
-        row.get(9)?,
-        row.get(10)?,
-        row.get(11)?,
-        row.get(12)?,
-        row.get(13)?,
-        row.get(14)?,
-        row.get(15)?,
-        row.get(16)?,
-        row.get(17)?,
-    ))
+    Ok(RawFile {
+        file_name: row.get(0)?,
+        reference_count: row.get(1)?,
+        phase: row.get(2)?,
+        reason: row.get(3)?,
+        title: row.get(4)?,
+        sha1: row.get(5)?,
+        timestamp: row.get(6)?,
+        media_type: row.get(7)?,
+        size_bytes: row.get(8)?,
+        description_url: row.get(9)?,
+        original_url: row.get(10)?,
+        license_short_name: row.get(11)?,
+        license_identifier: row.get(12)?,
+        license_url: row.get(13)?,
+        artist_html: row.get(14)?,
+        attribution_required: row.get(15)?,
+        restrictions: row.get(16)?,
+    })
 }
 
 fn file_from_raw(raw: RawFile) -> Result<FileState, BuildError> {
-    let facts = match (raw.5, raw.6) {
+    let facts = match (raw.title, raw.sha1) {
         (Some(title), Some(sha1)) => Some(CommonsFacts {
             title,
             sha1,
-            timestamp: raw.7.unwrap_or_default(),
-            media_type: raw.8.unwrap_or_default(),
-            size_bytes: raw.9.and_then(|size| u64::try_from(size).ok()).unwrap_or(0),
-            description_url: raw.10.unwrap_or_default(),
-            original_url: raw.11.unwrap_or_default(),
-            license_short_name: raw.12,
-            license_identifier: raw.13,
-            license_url: raw.14,
-            artist_html: raw.15,
-            attribution_required: raw.16,
-            restrictions: raw.17,
+            timestamp: raw.timestamp.unwrap_or_default(),
+            media_type: raw.media_type.unwrap_or_default(),
+            size_bytes: raw.size_bytes.unwrap_or(0),
+            description_url: raw.description_url.unwrap_or_default(),
+            original_url: raw.original_url.unwrap_or_default(),
+            license_short_name: raw.license_short_name,
+            license_identifier: raw.license_identifier,
+            license_url: raw.license_url,
+            artist_html: raw.artist_html,
+            attribution_required: raw.attribution_required,
+            restrictions: raw.restrictions,
         }),
         _ => None,
     };
     Ok(FileState {
-        file_name: raw.0,
-        reference_count: u64::try_from(raw.1).unwrap_or(0),
-        phase: Phase::parse(&raw.2)?,
-        reason: raw.3,
-        attempts: u64::try_from(raw.4).unwrap_or(0),
+        file_name: raw.file_name,
+        reference_count: raw.reference_count,
+        phase: Phase::parse(&raw.phase)?,
+        reason: raw.reason,
         facts,
     })
 }
@@ -509,11 +516,7 @@ impl AcquisitionState {
 }
 
 /// Whether a Commons license is redistributable under launch rules, and why not.
-///
-/// # Errors
-///
-/// Returns the reason a license is unqualified.
-pub fn qualify_license(facts: &CommonsFacts) -> Result<RecordingLicense, String> {
+pub(crate) fn qualify_license(facts: &CommonsFacts) -> Result<RecordingLicense, String> {
     if facts
         .restrictions
         .as_deref()
@@ -557,8 +560,7 @@ fn is_allowed_license(short_name: &str) -> bool {
 }
 
 /// Converts the Commons `Artist` HTML into plain text and linked page URLs.
-#[must_use]
-pub fn author_from_html(html_text: &str) -> (String, Vec<String>) {
+pub(crate) fn author_from_html(html_text: &str) -> (String, Vec<String>) {
     let mut text = String::new();
     let mut urls = Vec::new();
     let mut rest = html_text;

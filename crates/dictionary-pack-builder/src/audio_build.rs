@@ -1,14 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Mutex;
 
 use rusqlite::{Connection, params};
 use serde::Serialize;
 #[cfg(feature = "transcode")]
-use sha1::Sha1;
-use sha2::Digest;
+use sha1::{Digest as _, Sha1};
 #[cfg(feature = "transcode")]
 use sha2::Sha256;
 
@@ -16,17 +14,16 @@ use sha2::Sha256;
 use crate::audio_state::original_path;
 use crate::audio_state::{AcquisitionState, Phase, author_from_html, qualify_license};
 use crate::builder::{
-    StagingDirectory, asset_for, close_connection, io_error, sql_i64, sync_directory,
+    StagingDirectory, asset_for, close_connection, io_error, sql_i64, sync_directory, write_json,
 };
 #[cfg(feature = "transcode")]
 use crate::transcode_to_opus;
 use crate::{AudioEditionConfig, BuildError};
 use elephant_ladder_dictionary_pack::{
-    AUDIO_CHUNK_SCHEMA, AUDIO_ENCODER_PROFILE, AUDIO_INDEX_SCHEMA, AUDIO_MANIFEST_FILE,
-    AudioDelivery, AudioManifest, AudioRevisionInputs, FORMAT_VERSION, PackAsset, PackId,
-    PackRevision, RecordingFacts, RecordingLicense, RecordingStatus, Sha256Hex,
-    audio_chunk_file_name, audio_chunk_for, audio_index_file_name, commons_description_url,
-    commons_title, frame_recording_facts, recording_input_digest,
+    AUDIO_CHUNK_SCHEMA, AUDIO_INDEX_SCHEMA, AUDIO_MANIFEST_FILE, AudioDelivery, AudioManifest,
+    AudioMetadata, FORMAT_VERSION, PackAsset, PackId, PackRevision, RecordingFacts,
+    RecordingLicense, RecordingStatus, audio_chunk_file_name, audio_chunk_for,
+    audio_index_file_name, commons_description_url, commons_title, recording_input_digest,
 };
 
 /// Longest accepted source recording.
@@ -45,8 +42,8 @@ pub struct AudioBuildOptions {
 /// Summary of a built audio collection.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AudioBuildResult {
-    pub pack_id: String,
-    pub pack_revision: Sha256Hex,
+    pub pack_id: PackId,
+    pub pack_revision: PackRevision,
     pub recordings: u64,
     pub available: u64,
     pub unqualified: u64,
@@ -57,7 +54,13 @@ pub struct AudioBuildResult {
 
 struct Built {
     facts: RecordingFacts,
-    audio: Option<(Vec<u8>, [u8; 32], u64)>,
+    audio: Option<EncodedAudio>,
+}
+
+struct EncodedAudio {
+    bytes: Vec<u8>,
+    sha256: [u8; 32],
+    duration_ms: u64,
 }
 
 /// Builds an audio collection from a completed acquisition.
@@ -72,29 +75,24 @@ pub fn build_audio_collection(
     options: &AudioBuildOptions,
     output: &Path,
 ) -> Result<AudioBuildResult, BuildError> {
-    let pack_id = PackId::from_str(&audio.pack_id)?;
     let remote = options.delivery == AudioDelivery::Remote;
     let chunk_count = if remote { 0 } else { audio.chunk_count };
     if !remote && chunk_count == 0 {
-        return Err(BuildError::InvalidManifest(
+        return Err(BuildError::Invalid(
             "audio chunk count must be positive".to_owned(),
         ));
     }
-    let (corpus_pack_id, corpus_revision, corpus_language, started_at, completed_at) =
-        state.metadata()?;
+    let acquisition = state.metadata()?;
     // A remote collection needs only resolved facts, so it is buildable as soon as every
     // file has been looked up, long before the originals finish downloading. Its acquisition
     // moment is when that lookup began; the facts digest is what separates two builds.
     let acquired_at = if remote {
-        started_at
+        acquisition.started_at
     } else {
-        completed_at
-            .ok_or_else(|| BuildError::InvalidManifest("acquisition is not complete".to_owned()))?
+        acquisition
+            .completed_at
+            .ok_or_else(|| BuildError::Invalid("acquisition is not complete".to_owned()))?
     };
-    let corpus_pack_id = PackId::from_str(&corpus_pack_id)?;
-    let corpus_revision: Sha256Hex = corpus_revision
-        .parse()
-        .map_err(|message: &str| BuildError::InvalidManifest(message.to_owned()))?;
 
     let files = state.files()?;
     let built = build_all(
@@ -106,92 +104,66 @@ pub fn build_audio_collection(
 
     let mut digest = recording_input_digest();
     for recording in &built {
-        frame_recording_facts(&mut digest, &recording.facts);
+        recording.facts.frame(&mut digest);
     }
-    let recording_input_digest: [u8; 32] = digest.finalize().into();
-    let revision = PackRevision::derive_audio(AudioRevisionInputs {
-        pack_id: &pack_id,
-        corpus_language: &corpus_language,
-        source_corpus_pack_id: &corpus_pack_id,
-        source_corpus_revision: &PackRevision::from_bytes(*corpus_revision.as_bytes()),
-        acquired_at: &acquired_at,
-        encoder_profile: encoder_profile(options.delivery),
-        builder_revision: &options.builder_revision,
-        delivery: options.delivery.as_str(),
+    let metadata = AudioMetadata {
+        pack_id: audio.pack_id.clone(),
+        corpus_language: acquisition.corpus_language,
+        source_corpus_pack_id: acquisition.corpus_pack_id,
+        source_corpus_revision: acquisition.corpus_revision,
+        acquired_at,
+        builder_revision: options.builder_revision.clone(),
+        delivery: options.delivery,
         chunk_count,
-        recording_input_digest: &recording_input_digest,
-        minimum_app_version: &options.minimum_app_version,
-    });
+        recording_count: built.len() as u64,
+        available_count: built
+            .iter()
+            .filter(|recording| recording.facts.status == RecordingStatus::Available)
+            .count() as u64,
+        recording_input_digest: digest.finish(),
+        minimum_app_version: options.minimum_app_version.clone(),
+    };
+    let revision = metadata.revision();
 
     let mut staging = StagingDirectory::create(output)?;
     let (mut assets, routes) = if remote {
         (Vec::new(), Vec::new())
     } else {
-        write_chunks(staging.path(), &pack_id, &built, chunk_count)?
+        write_chunks(staging.path(), &metadata.pack_id, &built, chunk_count)?
     };
 
-    let index_name = audio_index_file_name(&pack_id, &revision);
+    let index_name = audio_index_file_name(&metadata.pack_id, &revision);
     let index_path = staging.path().join(&index_name);
-    write_index(
-        &index_path,
-        &IndexInputs {
-            pack_id: &pack_id,
-            revision: &revision,
-            corpus_language: &corpus_language,
-            corpus_pack_id: &corpus_pack_id,
-            corpus_revision: &corpus_revision,
-            acquired_at: &acquired_at,
-            builder_revision: &options.builder_revision,
-            delivery: options.delivery,
-            chunk_count,
-            recording_input_digest: &recording_input_digest,
-            minimum_app_version: &options.minimum_app_version,
-        },
-        &built,
-        &routes,
-    )?;
+    write_index(&index_path, &metadata, &revision, &built, &routes)?;
     assets.insert(0, asset_for("index", &index_name, &index_path)?);
 
     let manifest = AudioManifest {
         manifest_version: 1,
         format_version: FORMAT_VERSION,
-        pack_id: pack_id.as_str().to_owned(),
-        pack_revision: Sha256Hex::from_bytes(*revision.as_bytes()),
+        pack_id: metadata.pack_id.clone(),
+        pack_revision: revision,
         assets,
     };
-    let manifest_path = staging.path().join(AUDIO_MANIFEST_FILE);
-    let mut bytes = serde_json::to_vec_pretty(&manifest)
-        .map_err(|error| BuildError::InvalidManifest(error.to_string()))?;
-    bytes.push(b'\n');
-    fs::write(&manifest_path, bytes).map_err(|source| io_error("write", &manifest_path, source))?;
+    write_json(&staging.path().join(AUDIO_MANIFEST_FILE), &manifest)?;
     sync_directory(staging.path())?;
     staging.publish(output)?;
 
-    Ok(summarize(&pack_id, &revision, &built, &routes))
-}
-
-fn summarize(
-    pack_id: &PackId,
-    revision: &PackRevision,
-    built: &[Built],
-    routes: &[ChunkRoute],
-) -> AudioBuildResult {
     let count = |status| {
         built
             .iter()
             .filter(|recording| recording.facts.status == status)
             .count() as u64
     };
-    AudioBuildResult {
-        pack_id: pack_id.as_str().to_owned(),
-        pack_revision: Sha256Hex::from_bytes(*revision.as_bytes()),
+    Ok(AudioBuildResult {
+        pack_id: metadata.pack_id,
+        pack_revision: revision,
         recordings: built.len() as u64,
         available: count(RecordingStatus::Available),
         unqualified: count(RecordingStatus::Unqualified),
         missing: count(RecordingStatus::Missing),
         failed: count(RecordingStatus::Failed),
         blob_bytes: routes.iter().map(|route| route.blob_bytes).sum(),
-    }
+    })
 }
 
 fn build_all(
@@ -206,7 +178,7 @@ fn build_all(
     };
     for file in files {
         if unsettled.contains(&file.phase) {
-            return Err(BuildError::InvalidManifest(format!(
+            return Err(BuildError::Invalid(format!(
                 "`{}` is still {}",
                 file.file_name,
                 file.phase.as_str()
@@ -273,7 +245,7 @@ fn build_one(
         Phase::Pending | Phase::Resolved | Phase::Downloaded => {}
     }
     let facts = facts.ok_or_else(|| {
-        BuildError::InvalidManifest(format!("`{}` was downloaded without facts", file.file_name))
+        BuildError::Invalid(format!("`{}` was downloaded without facts", file.file_name))
     })?;
     let license: RecordingLicense = match qualify_license(facts) {
         Ok(license) => license,
@@ -332,10 +304,13 @@ fn encode_one(
         Ok(transcoded) => {
             recording.status = RecordingStatus::Available;
             recording.reason = None;
-            let sha256: [u8; 32] = Sha256::digest(&transcoded.bytes).into();
             Ok(Built {
                 facts: recording,
-                audio: Some((transcoded.bytes, sha256, transcoded.duration_ms)),
+                audio: Some(EncodedAudio {
+                    sha256: Sha256::digest(&transcoded.bytes).into(),
+                    bytes: transcoded.bytes,
+                    duration_ms: transcoded.duration_ms,
+                }),
             })
         }
         Err(error) => {
@@ -356,7 +331,7 @@ fn encode_one(
     _recording: RecordingFacts,
     _facts: &crate::audio_state::CommonsFacts,
 ) -> Result<Built, BuildError> {
-    Err(BuildError::InvalidManifest(
+    Err(BuildError::Invalid(
         "this builder was compiled without the audio encoder".to_owned(),
     ))
 }
@@ -417,7 +392,7 @@ fn write_chunks(
                     .audio
                     .as_ref()
                     .filter(|_| audio_chunk_for(&recording.facts.file_name, chunk_count) == ordinal)
-                    .map(|(bytes, sha256, _)| (*sha256, bytes.as_slice()))
+                    .map(|audio| (audio.sha256, audio.bytes.as_slice()))
             })
             .collect::<BTreeMap<_, _>>();
         let (asset, route) = write_chunk(directory, pack_id, ordinal, &blobs)?;
@@ -496,7 +471,7 @@ fn author_key(facts: &RecordingFacts) -> Result<Option<AuthorKey>, BuildError> {
     } else {
         Some(
             serde_json::to_string(&facts.author_urls)
-                .map_err(|error| BuildError::InvalidManifest(error.to_string()))?,
+                .map_err(|error| BuildError::Invalid(error.to_string()))?,
         )
     };
     Ok(Some((facts.author_text.clone(), urls)))
@@ -531,9 +506,7 @@ fn insert_recordings(
                     .binary_search(&key)
                     .ok()
                     .and_then(|ordinal| i64::try_from(ordinal).ok())
-                    .ok_or_else(|| {
-                        BuildError::InvalidManifest("license was not indexed".to_owned())
-                    })
+                    .ok_or_else(|| BuildError::Invalid("license was not indexed".to_owned()))
             })
             .transpose()?;
         let author_ordinal = author_key(facts)?
@@ -542,7 +515,7 @@ fn insert_recordings(
                     .binary_search(&key)
                     .ok()
                     .and_then(|ordinal| i64::try_from(ordinal).ok())
-                    .ok_or_else(|| BuildError::InvalidManifest("author was not indexed".to_owned()))
+                    .ok_or_else(|| BuildError::Invalid("author was not indexed".to_owned()))
             })
             .transpose()?;
         // Commons derives a file's title and description page from its name, so only the
@@ -576,12 +549,12 @@ fn insert_recordings(
             license_ordinal,
             author_ordinal,
             facts.attribution_required,
-            audio.map(|(_, sha256, _)| sha256.as_slice()),
+            audio.map(|audio| audio.sha256.as_slice()),
             audio
-                .map(|(bytes, _, _)| sql_i64("opus size", bytes.len() as u64))
+                .map(|audio| sql_i64("opus size", audio.bytes.len() as u64))
                 .transpose()?,
             audio
-                .map(|(_, _, duration)| sql_i64("duration", *duration))
+                .map(|audio| sql_i64("duration", audio.duration_ms))
                 .transpose()?,
             audio
                 .map(|_| sql_i64("chunk", audio_chunk_for(&facts.file_name, chunk_count)))
@@ -591,40 +564,16 @@ fn insert_recordings(
     Ok(())
 }
 
-const fn encoder_profile(delivery: AudioDelivery) -> &'static str {
-    match delivery {
-        AudioDelivery::Bundled => AUDIO_ENCODER_PROFILE,
-        AudioDelivery::Remote => "",
-    }
-}
-
-struct IndexInputs<'a> {
-    pack_id: &'a PackId,
-    revision: &'a PackRevision,
-    corpus_language: &'a str,
-    corpus_pack_id: &'a PackId,
-    corpus_revision: &'a Sha256Hex,
-    acquired_at: &'a str,
-    builder_revision: &'a str,
-    delivery: AudioDelivery,
-    chunk_count: u64,
-    recording_input_digest: &'a [u8; 32],
-    minimum_app_version: &'a str,
-}
-
 fn write_index(
     path: &Path,
-    inputs: &IndexInputs<'_>,
+    metadata: &AudioMetadata,
+    revision: &PackRevision,
     built: &[Built],
     routes: &[ChunkRoute],
 ) -> Result<(), BuildError> {
     let connection = Connection::open(path)?;
     connection.execute_batch(AUDIO_INDEX_SCHEMA)?;
     connection.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; BEGIN;")?;
-    let available = built
-        .iter()
-        .filter(|recording| recording.facts.status == RecordingStatus::Available)
-        .count() as u64;
     connection.execute(
         "INSERT INTO collection_metadata (singleton, format_version, pack_id, pack_revision, \
          corpus_language, source_corpus_pack_id, source_corpus_revision, acquired_at, \
@@ -633,20 +582,20 @@ fn write_index(
          VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             FORMAT_VERSION,
-            inputs.pack_id.as_str(),
-            inputs.revision.as_bytes().as_slice(),
-            inputs.corpus_language,
-            inputs.corpus_pack_id.as_str(),
-            inputs.corpus_revision.as_bytes().as_slice(),
-            inputs.acquired_at,
-            encoder_profile(inputs.delivery),
-            inputs.builder_revision,
-            inputs.delivery.as_str(),
-            sql_i64("chunk count", inputs.chunk_count)?,
-            sql_i64("recordings", built.len() as u64)?,
-            sql_i64("available", available)?,
-            inputs.recording_input_digest.as_slice(),
-            inputs.minimum_app_version,
+            metadata.pack_id.as_str(),
+            revision.as_bytes().as_slice(),
+            metadata.corpus_language,
+            metadata.source_corpus_pack_id.as_str(),
+            metadata.source_corpus_revision.as_bytes().as_slice(),
+            metadata.acquired_at,
+            metadata.delivery.encoder_profile(),
+            metadata.builder_revision,
+            metadata.delivery.as_str(),
+            sql_i64("chunk count", metadata.chunk_count)?,
+            sql_i64("recordings", metadata.recording_count)?,
+            sql_i64("available", metadata.available_count)?,
+            metadata.recording_input_digest.as_slice(),
+            metadata.minimum_app_version,
         ],
     )?;
     for route in routes {
@@ -698,7 +647,13 @@ fn write_index(
             params![sql_i64("author", ordinal as u64)?, author_text, author_urls],
         )?;
     }
-    insert_recordings(&connection, built, &licenses, &authors, inputs.chunk_count)?;
+    insert_recordings(
+        &connection,
+        built,
+        &licenses,
+        &authors,
+        metadata.chunk_count,
+    )?;
     connection.execute_batch("COMMIT; VACUUM;")?;
     close_connection(connection)
 }

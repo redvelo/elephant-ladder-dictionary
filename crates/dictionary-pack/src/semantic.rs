@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::{EntryId, PackError, PackId, PackRevision};
+use crate::{EntryId, MAX_ROUTING_FORMS, PackError, PackId, PackRevision};
 
 /// The first non-empty exact-match stage used for an entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -42,12 +42,6 @@ impl<T> Bounded<T> {
             total: 0,
             items: Vec::new(),
         }
-    }
-
-    /// Authored items exist outside this window.
-    #[must_use]
-    pub fn is_partial(&self) -> bool {
-        self.offset > 0 || self.offset + self.items.len() < self.total
     }
 }
 
@@ -136,12 +130,6 @@ impl ProjectionOptions {
     }
 }
 
-impl Default for ProjectionOptions {
-    fn default() -> Self {
-        Self::summary()
-    }
-}
-
 /// An authored ruby annotation over base text.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -187,14 +175,10 @@ pub struct Pronunciation {
     pub sense: Option<String>,
     pub alternative: Option<String>,
     pub not_same_pronunciation: Option<bool>,
-    pub audio: Option<AudioReference>,
+    /// The normalized Wikimedia Commons file name of the authored `audio` value, when
+    /// that value is a plausible file name.
+    pub audio: Option<String>,
     pub audio_ipa: Option<String>,
-    pub wav_url: Option<String>,
-    pub ogg_url: Option<String>,
-    pub oga_url: Option<String>,
-    pub mp3_url: Option<String>,
-    pub opus_url: Option<String>,
-    pub flac_url: Option<String>,
     pub homophones: Vec<String>,
     pub hyphenation: Vec<String>,
     pub tags: Vec<String>,
@@ -202,16 +186,6 @@ pub struct Pronunciation {
     pub topics: Vec<String>,
     /// At least one string or string-array value was bounded.
     pub truncated: bool,
-}
-
-/// A pronunciation recording identified by its normalized Wikimedia Commons file name.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AudioReference {
-    /// The authored `audio` value.
-    pub authored: String,
-    /// The Commons file name with underscores as spaces and an uppercase first
-    /// character, or `None` when the authored value is not a plausible file name.
-    pub file_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -482,8 +456,6 @@ pub struct Entry {
     pub etymology_number: Option<String>,
     pub tags: Vec<String>,
     pub raw_tags: Vec<String>,
-    pub wikidata: Vec<String>,
-    pub wikipedia: Vec<String>,
     pub form_of: Vec<LemmaReference>,
     pub alt_of: Vec<LemmaReference>,
     pub classifiers: Vec<Classifier>,
@@ -551,7 +523,7 @@ pub(crate) struct RoutingRecord {
 }
 
 impl RoutingRecord {
-    pub(crate) fn parse(bytes: &[u8], max_forms: usize) -> Result<Self, PackError> {
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, PackError> {
         let Value::Object(object) = serde_json::from_slice(bytes).map_err(|error| {
             PackError::Corrupt(format!("stored record is invalid JSON: {error}"))
         })?
@@ -569,7 +541,7 @@ impl RoutingRecord {
                 let form = value_object(value, &format!("record `forms[{index}]`"))?;
                 let form = required_string(form, "form", &format!("record `forms[{index}]`"))?;
                 if !form.is_empty() && form != "-" {
-                    if forms.len() == max_forms {
+                    if forms.len() == MAX_ROUTING_FORMS {
                         return Err(PackError::Limit(
                             "record routing forms exceed limit".to_owned(),
                         ));
@@ -607,8 +579,6 @@ impl RoutingRecord {
         let etymology_number = fields.index("etymology_number")?;
         let tags = fields.texts("tags")?;
         let raw_tags = fields.texts("raw_tags")?;
-        let wikidata = fields.texts("wikidata")?;
-        let wikipedia = fields.texts("wikipedia")?;
         let entry_truncated = fields.truncated || headword_truncated || language_code_truncated;
 
         let senses_value = object.get("senses");
@@ -640,8 +610,6 @@ impl RoutingRecord {
             etymology_number,
             tags,
             raw_tags,
-            wikidata,
-            wikipedia,
             form_of: projector.lemmas(object.get("form_of"), "record `form_of`")?,
             alt_of: projector.lemmas(object.get("alt_of"), "record `alt_of`")?,
             classifiers: projector
@@ -891,7 +859,6 @@ impl Projector<'_> {
             limit,
             |value, context| {
                 let mut fields = Fields::new(value_object(value, context)?, context, self.options);
-                let authored_audio = fields.text("audio")?;
                 Ok(Pronunciation {
                     ipa: fields.text("ipa")?,
                     enpr: fields.text("enpr")?,
@@ -910,17 +877,10 @@ impl Projector<'_> {
                     sense: fields.text("sense")?,
                     alternative: fields.text("alternative")?,
                     not_same_pronunciation: fields.flag("not_same_pronunciation")?,
-                    audio: authored_audio.map(|authored| AudioReference {
-                        file_name: commons_file_name(&authored),
-                        authored,
-                    }),
+                    audio: fields
+                        .text("audio")?
+                        .and_then(|authored| commons_file_name(&authored)),
                     audio_ipa: fields.text("audio-ipa")?,
-                    wav_url: fields.text("wav_url")?,
-                    ogg_url: fields.text("ogg_url")?,
-                    oga_url: fields.text("oga_url")?,
-                    mp3_url: fields.text("mp3_url")?,
-                    opus_url: fields.text("opus_url")?,
-                    flac_url: fields.text("flac_url")?,
                     homophones: fields.texts("homophones")?,
                     hyphenation: fields.texts("hyphenation")?,
                     tags: fields.texts("tags")?,

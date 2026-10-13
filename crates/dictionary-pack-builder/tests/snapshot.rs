@@ -1,57 +1,30 @@
-use std::io::Cursor;
-use std::path::PathBuf;
+mod common;
 
-use elephant_ladder_dictionary_pack::{DictionaryPack, LookupOptions, PackLimits};
+use std::io::Cursor;
+
+use elephant_ladder_dictionary_pack::{DictionaryPack, LookupOptions};
 use elephant_ladder_dictionary_pack_builder::{
-    BuildOptions, EditionConfig, MAX_MIRROR_PART_BYTES, SourceSnapshot, build_manifest, build_pack,
+    EditionConfig, MAX_MIRROR_PART_BYTES, SourceSnapshot, build_pack, corpus_identity,
     validate_snapshot,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 const SOURCE: &[u8] = b"{\"lang_code\":\"fr\",\"word\":\"livre\"}\n";
 
 fn edition() -> EditionConfig {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../editions/frwiktionary.json");
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    serde_json::from_slice(&std::fs::read(common::fr_edition_path()).unwrap()).unwrap()
 }
 
 fn snapshot_json() -> Value {
-    let compressed_sha = "f5150fd28b8d160d6377f951597700ebf9ca7b86be9964413099980de4e3c650";
-    json!({
-        "schema_version": 1,
-        "wiktionary_edition": "frwiktionary",
-        "captured_at": "2026-09-16T12:09:00Z",
-        "origin": {
-            "source_url": "https://kaikki.org/frwiktionary/raw-wiktextract-data.jsonl.gz",
-            "info_url": "https://kaikki.org/frwiktionary/rawdata.html",
-            "etag": "\"6aa8f64f-2ad47c51\"",
-            "last_modified": "Tue, 15 Sep 2026 07:39:59 GMT",
-            "info_statement": "extracted on 2026-09-15 from the frwiktionary dump dated 2026-09-01 using wiktextract ( d6fca27 and 65e1673 )"
-        },
-        "dump_date": "2026-09-01",
-        "extraction_date": "2026-09-15",
-        "wiktextract_revision": "d6fca27",
-        "wikitextprocessor_revision": "65e1673",
-        "compressed": {"size_bytes": MAX_MIRROR_PART_BYTES + 10, "sha256": compressed_sha},
-        "uncompressed": {
-            "size_bytes": SOURCE.len(),
-            "sha256": hex::encode(Sha256::digest(SOURCE)),
-            "line_count": 1
-        },
-        "mirror": {
-            "repository": "redvelo/elephant-ladder-dictionary-packs",
-            "release_tag": "source-frwiktionary-20260901-f5150fd28b8d",
-            "parts": [
-                {"file_name": "frwiktionary-20260901-f5150fd28b8d.jsonl.gz.part000",
-                 "size_bytes": MAX_MIRROR_PART_BYTES, "sha256": compressed_sha},
-                {"file_name": "frwiktionary-20260901-f5150fd28b8d.jsonl.gz.part001",
-                 "size_bytes": 10, "sha256": compressed_sha}
-            ],
-            "info_page": {"file_name": "frwiktionary-20260901-f5150fd28b8d.rawdata.html",
-                          "size_bytes": 15279, "sha256": compressed_sha}
-        }
-    })
+    let mut value = common::fr_snapshot_json(SOURCE, MAX_MIRROR_PART_BYTES + 10);
+    let sha = value["compressed"]["sha256"].clone();
+    value["mirror"]["parts"] = json!([
+        {"file_name": "frwiktionary-20260901-f5150fd28b8d.jsonl.gz.part000",
+         "size_bytes": MAX_MIRROR_PART_BYTES, "sha256": sha},
+        {"file_name": "frwiktionary-20260901-f5150fd28b8d.jsonl.gz.part001",
+         "size_bytes": 10, "sha256": sha}
+    ]);
+    value
 }
 
 fn snapshot(value: Value) -> SourceSnapshot {
@@ -59,35 +32,31 @@ fn snapshot(value: Value) -> SourceSnapshot {
 }
 
 #[test]
-fn snapshot_manifests_are_deterministic_and_build() {
+fn snapshot_identities_are_deterministic_and_build() {
     let edition = edition();
     let snapshot = snapshot(snapshot_json());
     validate_snapshot(&edition, &snapshot).unwrap();
-    let manifest = build_manifest(&edition, &snapshot, "builder").unwrap();
+    let identity = corpus_identity(&edition, &snapshot, "builder").unwrap();
     assert_eq!(
-        serde_json::to_vec(&manifest).unwrap(),
-        serde_json::to_vec(&build_manifest(&edition, &snapshot, "builder").unwrap()).unwrap()
+        identity,
+        corpus_identity(&edition, &snapshot, "builder").unwrap()
     );
-    assert_eq!(manifest.kaikki_extraction_date, "2026-09-15");
-    assert_eq!(manifest.wiktextract_revision, "d6fca27");
+    assert_eq!(identity.kaikki_extraction_date, "2026-09-15");
+    assert_eq!(identity.wiktextract_revision, "d6fca27");
+    let source_manifest: Value = serde_json::from_str(&identity.source_manifest).unwrap();
     assert_eq!(
-        manifest.source_manifest["snapshot"]["mirror"]["release_tag"],
+        source_manifest["snapshot"]["mirror"]["release_tag"],
         "source-frwiktionary-20260901-f5150fd28b8d"
     );
+    assert!(corpus_identity(&edition, &snapshot, "").is_err());
 
     let temporary = tempfile::tempdir().unwrap();
     let output = temporary.path().join("pack");
-    build_pack(
-        &manifest,
-        Cursor::new(SOURCE),
-        &output,
-        BuildOptions::default(),
-    )
-    .unwrap();
-    let pack = DictionaryPack::open(&output, PackLimits::default()).unwrap();
-    assert_eq!(pack.metadata().kaikki_extraction_date, "2026-09-15");
+    build_pack(&identity, Cursor::new(SOURCE), &output).unwrap();
+    let pack = DictionaryPack::open(&output).unwrap();
+    assert_eq!(pack.identity(), &identity);
     assert_eq!(
-        pack.lookup("livre", LookupOptions::default())
+        pack.lookup("livre", None, LookupOptions::default())
             .unwrap()
             .matches
             .len(),

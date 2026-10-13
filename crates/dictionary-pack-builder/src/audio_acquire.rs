@@ -65,8 +65,8 @@ impl AcquireOptions {
             max_attempts: 3,
             request_attempts: 6,
             backoff: Duration::from_secs(5),
-            rate_limit_pause: Duration::from_secs(60),
-            server_error_pause: Duration::from_secs(15 * 60),
+            rate_limit_pause: Duration::from_mins(1),
+            server_error_pause: Duration::from_mins(15),
             max_consecutive_rate_limits: 10,
             shard: None,
         }
@@ -231,7 +231,7 @@ fn resolve_batch(
             None => Ok((value, 0)),
         }
     })
-    .map_err(|error| BuildError::InvalidManifest(format!("Commons API query stopped: {error}")))?;
+    .map_err(|error| BuildError::Invalid(format!("Commons API query stopped: {error}")))?;
 
     let mut aliases = BTreeMap::new();
     for key in ["normalized", "redirects"] {
@@ -308,9 +308,7 @@ fn download_batch(
         let facts = state
             .file(&name)?
             .and_then(|file| file.facts)
-            .ok_or_else(|| {
-                BuildError::InvalidManifest(format!("`{name}` has no resolved facts"))
-            })?;
+            .ok_or_else(|| BuildError::Invalid(format!("`{name}` has no resolved facts")))?;
         jobs.push_back((name, facts));
     }
     let jobs = Mutex::new(jobs);
@@ -348,9 +346,7 @@ fn download_batch(
             }
         }
         match stop {
-            Some(reason) => Err(BuildError::InvalidManifest(format!(
-                "downloads stopped: {reason}"
-            ))),
+            Some(reason) => Err(BuildError::Invalid(format!("downloads stopped: {reason}"))),
             None => Ok(()),
         }
     })

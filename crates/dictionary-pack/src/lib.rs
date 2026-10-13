@@ -8,14 +8,14 @@ mod identity;
 mod manifest;
 mod pack;
 mod semantic;
-mod service;
 mod unicode;
+mod view;
 
 pub use audio::{
     AUDIO_MANIFEST_FILE, AudioCollection, AudioDelivery, AudioManifest, AudioMetadata,
     AudioValidationReport, Recording, RecordingAudio, RecordingFacts, RecordingLicense,
     RecordingStatus, audio_chunk_file_name, audio_chunk_for, audio_index_file_name,
-    frame_recording_facts, opus_duration_ms, recording_input_digest,
+    opus_duration_ms, recording_input_digest,
 };
 pub use catalog::{
     AudioPack, CATALOG_FILE, Catalog, CatalogAsset, CatalogError, CatalogPack, CorpusPack,
@@ -27,25 +27,21 @@ pub use format::{
     AUDIO_INDEX_APPLICATION_ID, AUDIO_INDEX_SCHEMA, AUDIO_MEDIA_TYPE, COMPRESSION_PROFILE,
     DATA_APPLICATION_ID, DATA_SCHEMA, FORMAT_VERSION, INDEX_APPLICATION_ID, INDEX_SCHEMA,
     ROUTING_POLICY, SELECTED_STREAM_DIGEST_DOMAIN, SHARD_RECORD_DIGEST_DOMAIN,
-    initialize_data_database, initialize_index_database,
 };
 pub use identity::{
-    AudioRevisionInputs, EntryId, PackId, PackRevision, PackRevisionInputs, SnapshotRevision,
-    SnapshotViewIdentity, ViewType,
+    CorpusIdentity, EntryId, FramedDigest, PackId, PackRevision, Sha256Hex, SnapshotRevision,
 };
-pub use manifest::{AssetManifest, PACK_MANIFEST_FILE, PackAsset, PackManifest, Sha256Hex};
+pub use manifest::{PACK_MANIFEST_FILE, PackAsset, PackManifest};
 pub use pack::{
     AudioReferences, DictionaryPack, ExpectedPack, LookupMatch, LookupOptions, LookupOutcome,
-    PackLimits, PackMetadata, ValidationReport,
+    MAX_ASSETS, MAX_LOOKUP_RESULTS, MAX_QUERY_BYTES, MAX_ROUTING_FORMS, MAX_SECTION_PAGE_ITEMS,
+    ValidationReport,
 };
 pub use semantic::{
-    AudioReference, Bounded, Classifier, Descendant, EmphasisRange, Entry, EntryReference, Example,
-    Form, Hyphenation, LemmaReference, MatchClass, ProjectionOptions, Pronunciation, Relation,
+    Bounded, Classifier, Descendant, EmphasisRange, Entry, EntryReference, Example, Form,
+    Hyphenation, LemmaReference, MatchClass, ProjectionOptions, Pronunciation, Relation,
     RelationGroup, RelationKind, Ruby, Section, SectionPage, Sense, Translation,
     commons_description_url, commons_file_name, commons_title,
 };
-pub use service::{
-    BilingualLookupOutcome, BilingualView, DictionaryService, DictionarySnapshot, DictionaryView,
-    MonolingualView, SnapshotError, ViewLookup, ViewOutcome,
-};
-pub use unicode::{LookupKeys, UNICODE_PROFILE, folded_key, lookup_keys, nfc_key};
+pub use unicode::{LookupKeys, UNICODE_PROFILE, lookup_keys};
+pub use view::{DictionarySnapshot, DictionaryView, SnapshotError, ViewLookup, ViewOutcome};

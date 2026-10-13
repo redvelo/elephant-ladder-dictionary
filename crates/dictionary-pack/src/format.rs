@@ -1,7 +1,3 @@
-use rusqlite::Connection;
-
-use crate::PackError;
-
 /// The only pack format version supported by this crate.
 pub const FORMAT_VERSION: u32 = 1;
 /// `SQLite` application ID `ELDI` for a dictionary index database.
@@ -20,9 +16,9 @@ pub const AUDIO_CHUNK_APPLICATION_ID: u32 = 0x454c_4143;
 pub const AUDIO_INDEX_SCHEMA: &str = include_str!("schema/audio-index-v1.sql");
 /// Canonical schema used to create a format-v1 audio chunk database.
 pub const AUDIO_CHUNK_SCHEMA: &str = include_str!("schema/audio-chunk-v1.sql");
-/// Encoding of every recording in a format-v1 audio collection.
+/// Encoding of every recording in a bundled format-v1 audio collection.
 pub const AUDIO_ENCODER_PROFILE: &str = "ogg-opus-v1-mono-48khz-24kbps-voip-20ms";
-/// Media type of every recording in a format-v1 audio collection.
+/// Media type of every recording in a bundled format-v1 audio collection.
 pub const AUDIO_MEDIA_TYPE: &str = "audio/ogg; codecs=opus";
 /// Compression algorithm and settings required by format-v1 packs.
 pub const COMPRESSION_PROFILE: &str = "zstd-v1-level-6";
@@ -33,34 +29,6 @@ pub const SELECTED_STREAM_DIGEST_DOMAIN: &[u8] = b"ELDICT-SELECTED-STREAM-V1";
 /// Domain separator for the digest of records assigned to one shard.
 pub const SHARD_RECORD_DIGEST_DOMAIN: &[u8] = b"ELDICT-SHARD-RECORDS-V1";
 
-/// Initializes a new index database with the exact format-v1 schema.
-///
-/// The caller must provide an empty database and finalize it before treating it as
-/// an immutable pack asset.
-///
-/// # Errors
-///
-/// Returns [`PackError::Database`] when `SQLite` cannot apply the schema, including
-/// when the connection already contains conflicting objects.
-pub fn initialize_index_database(connection: &Connection) -> Result<(), PackError> {
-    connection.execute_batch(INDEX_SCHEMA)?;
-    Ok(())
-}
-
-/// Initializes a new data-shard database with the exact format-v1 schema.
-///
-/// The caller must provide an empty database and finalize it before treating it as
-/// an immutable pack asset.
-///
-/// # Errors
-///
-/// Returns [`PackError::Database`] when `SQLite` cannot apply the schema, including
-/// when the connection already contains conflicting objects.
-pub fn initialize_data_database(connection: &Connection) -> Result<(), PackError> {
-    connection.execute_batch(DATA_SCHEMA)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -69,7 +37,22 @@ mod tests {
 
     use super::*;
 
-    fn object_names(connection: &Connection) -> BTreeSet<(String, String)> {
+    fn objects(schema: &str, application_id: u32) -> BTreeSet<(String, String)> {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(schema).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA application_id", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            application_id
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            FORMAT_VERSION
+        );
+        assert!(connection.execute_batch(schema).is_err());
         let mut statement = connection
             .prepare(
                 "SELECT type, name FROM sqlite_schema
@@ -85,24 +68,9 @@ mod tests {
     }
 
     #[test]
-    fn index_schema_has_exact_identity_and_objects() {
-        let connection = Connection::open_in_memory().unwrap();
-        initialize_index_database(&connection).unwrap();
-
+    fn schemas_have_exact_identity_and_objects() {
         assert_eq!(
-            connection
-                .query_row("PRAGMA application_id", [], |row| row.get::<_, u32>(0))
-                .unwrap(),
-            INDEX_APPLICATION_ID
-        );
-        assert_eq!(
-            connection
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
-                .unwrap(),
-            FORMAT_VERSION
-        );
-        assert_eq!(
-            object_names(&connection),
+            objects(INDEX_SCHEMA, INDEX_APPLICATION_ID),
             BTreeSet::from([
                 ("index".to_owned(), "entries_shard_route".to_owned()),
                 ("table".to_owned(), "data_shards".to_owned()),
@@ -112,42 +80,12 @@ mod tests {
                 ("table".to_owned(), "source_shape_observations".to_owned()),
             ])
         );
-    }
-
-    #[test]
-    fn data_schema_has_exact_identity_and_objects() {
-        let connection = Connection::open_in_memory().unwrap();
-        initialize_data_database(&connection).unwrap();
-
         assert_eq!(
-            connection
-                .query_row("PRAGMA application_id", [], |row| row.get::<_, u32>(0))
-                .unwrap(),
-            DATA_APPLICATION_ID
-        );
-        assert_eq!(
-            connection
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
-                .unwrap(),
-            FORMAT_VERSION
-        );
-        assert_eq!(
-            object_names(&connection),
+            objects(DATA_SCHEMA, DATA_APPLICATION_ID),
             BTreeSet::from([
                 ("table".to_owned(), "records".to_owned()),
                 ("table".to_owned(), "shard_metadata".to_owned()),
             ])
         );
-    }
-
-    #[test]
-    fn schemas_reject_duplicate_initialization() {
-        let index = Connection::open_in_memory().unwrap();
-        initialize_index_database(&index).unwrap();
-        assert!(initialize_index_database(&index).is_err());
-
-        let data = Connection::open_in_memory().unwrap();
-        initialize_data_database(&data).unwrap();
-        assert!(initialize_data_database(&data).is_err());
     }
 }

@@ -4,215 +4,68 @@ use std::fmt;
 use std::io::{self, BufRead, BufReader, Read};
 use std::str;
 
+use elephant_ladder_dictionary_pack::MAX_ROUTING_FORMS;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
 /// A selected, validated source record.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SourceRecord {
+#[derive(Debug)]
+pub(crate) struct SourceRecord {
     /// One-based line number in the uncompressed source.
     pub line_number: u64,
     /// Zero-based byte offset of the line in the uncompressed source.
     pub byte_offset: u64,
     /// Exact source bytes, excluding the terminal LF or CRLF delimiter.
     pub source_bytes: Vec<u8>,
-    /// The selected record's authored headword.
     pub word: String,
     /// Qualified `forms[].form` values in source order.
     pub routing_forms: Vec<String>,
-    /// Parsed selected object reused by crate-internal consumers.
-    pub(crate) object: Map<String, Value>,
 }
 
-/// A source JSONL input error.
+/// A source JSONL input error, located by one-based line and zero-based byte offset.
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum SourceIngestionError {
-    /// Reading the decompressed source failed.
     #[error("failed to read source line {line_number} at byte offset {byte_offset}: {source}")]
     Io {
-        /// One-based source line number.
         line_number: u64,
-        /// Zero-based uncompressed source byte offset.
         byte_offset: u64,
-        /// Underlying I/O error.
         #[source]
         source: io::Error,
     },
-    /// The source position cannot be represented by the public offset type.
-    #[error("source position overflow at line {line_number}, byte offset {byte_offset}")]
-    PositionOverflow {
-        /// One-based source line number.
-        line_number: u64,
-        /// Last representable zero-based byte offset.
-        byte_offset: u64,
-    },
-    /// A delimiter-free line exceeded the configured byte bound.
     #[error(
         "source line {line_number} at byte offset {byte_offset} exceeds the {max_bytes}-byte limit"
     )]
     LineTooLong {
-        /// One-based source line number.
         line_number: u64,
-        /// Zero-based uncompressed source byte offset.
         byte_offset: u64,
-        /// Configured maximum delimiter-free line length.
         max_bytes: usize,
     },
-    /// A delimiter-free source line was empty.
-    #[error("source line {line_number} at byte offset {byte_offset} is empty")]
-    EmptyLine {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-    },
-    /// A source line was not UTF-8.
-    #[error(
-        "source line {line_number} at byte offset {byte_offset} is not UTF-8 (valid through byte {valid_up_to})"
-    )]
-    InvalidUtf8 {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-        /// First byte index not known to be valid UTF-8.
-        valid_up_to: usize,
-    },
-    /// A source line was not valid JSON.
     #[error("source line {line_number} at byte offset {byte_offset} is malformed JSON: {source}")]
     MalformedJson {
-        /// One-based source line number.
         line_number: u64,
-        /// Zero-based uncompressed source byte offset.
         byte_offset: u64,
-        /// JSON parser error.
         #[source]
         source: serde_json::Error,
     },
-    /// A source line's top-level JSON value was not an object.
-    #[error("source line {line_number} at byte offset {byte_offset} is not a JSON object")]
-    NonObject {
-        /// One-based source line number.
+    #[error("source line {line_number} at byte offset {byte_offset} {reason}")]
+    Invalid {
         line_number: u64,
-        /// Zero-based uncompressed source byte offset.
         byte_offset: u64,
-    },
-    /// A present `lang_code` field was not a string.
-    #[error(
-        "source line {line_number} at byte offset {byte_offset} has {actual} `lang_code`; expected a string"
-    )]
-    InvalidLangCode {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-        /// JSON type found in the field.
-        actual: &'static str,
-    },
-    /// A selected record had no `word` field.
-    #[error("source line {line_number} at byte offset {byte_offset} has no `word`")]
-    MissingWord {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-    },
-    /// A selected record's `word` field was not a string.
-    #[error(
-        "source line {line_number} at byte offset {byte_offset} has {actual} `word`; expected a string"
-    )]
-    InvalidWord {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-        /// JSON type found in the field.
-        actual: &'static str,
-    },
-    /// A selected record's headword was empty.
-    #[error("source line {line_number} at byte offset {byte_offset} has an empty `word`")]
-    EmptyWord {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-    },
-    /// A selected record's `forms` field was not an array.
-    #[error(
-        "source line {line_number} at byte offset {byte_offset} has {actual} `forms`; expected an array"
-    )]
-    InvalidForms {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-        /// JSON type found in the field.
-        actual: &'static str,
-    },
-    /// An element of `forms` was not an object.
-    #[error(
-        "source line {line_number} at byte offset {byte_offset} has {actual} `forms[{index}]`; expected an object"
-    )]
-    InvalidFormEntry {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-        /// Zero-based index in `forms`.
-        index: usize,
-        /// JSON type found at the index.
-        actual: &'static str,
-    },
-    /// A `forms` element had no `form` field.
-    #[error("source line {line_number} at byte offset {byte_offset} has no `forms[{index}].form`")]
-    MissingForm {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-        /// Zero-based index in `forms`.
-        index: usize,
-    },
-    /// A `forms[].form` field was not a string.
-    #[error(
-        "source line {line_number} at byte offset {byte_offset} has {actual} `forms[{index}].form`; expected a string"
-    )]
-    InvalidForm {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-        /// Zero-based index in `forms`.
-        index: usize,
-        /// JSON type found in the field.
-        actual: &'static str,
-    },
-    /// A selected record exceeded the routing-form count bound.
-    #[error(
-        "source line {line_number} at byte offset {byte_offset} exceeds the {max_forms}-routing-form limit"
-    )]
-    TooManyRoutingForms {
-        /// One-based source line number.
-        line_number: u64,
-        /// Zero-based uncompressed source byte offset.
-        byte_offset: u64,
-        /// Configured maximum number of retained routing forms.
-        max_forms: usize,
+        reason: String,
     },
 }
 
-/// Streaming reader for decompressed Wiktextract JSONL.
+/// Streaming reader for decompressed Wiktextract JSONL that yields the records of
+/// one language.
 ///
 /// The reader buffers at most one line up to `max_line_bytes + 1` bytes. Oversized
 /// lines are drained before an error is returned, so iteration can continue.
-pub struct JsonlSourceReader<R> {
+pub(crate) struct JsonlSourceReader<R> {
     reader: BufReader<R>,
     selected_lang_code: String,
     max_line_bytes: usize,
-    max_routing_forms: usize,
     next_line_number: u64,
     next_byte_offset: u64,
     finished: bool,
@@ -220,18 +73,11 @@ pub struct JsonlSourceReader<R> {
 }
 
 impl<R: Read> JsonlSourceReader<R> {
-    /// Creates a bounded source reader.
-    pub fn new(
-        reader: R,
-        selected_lang_code: impl Into<String>,
-        max_line_bytes: usize,
-        max_routing_forms: usize,
-    ) -> Self {
+    pub(crate) fn new(reader: R, selected_lang_code: &str, max_line_bytes: usize) -> Self {
         Self {
             reader: BufReader::new(reader),
-            selected_lang_code: selected_lang_code.into(),
+            selected_lang_code: selected_lang_code.to_owned(),
             max_line_bytes,
-            max_routing_forms,
             next_line_number: 1,
             next_byte_offset: 0,
             finished: false,
@@ -239,9 +85,8 @@ impl<R: Read> JsonlSourceReader<R> {
         }
     }
 
-    /// Returns the number of physical JSONL records read so far.
-    #[must_use]
-    pub const fn source_record_count(&self) -> u64 {
+    /// The number of physical JSONL records read so far.
+    pub(crate) const fn source_record_count(&self) -> u64 {
         self.source_record_count
     }
 
@@ -270,8 +115,7 @@ impl<R: Read> JsonlSourceReader<R> {
                     discarded = true;
                 }
             }
-            physical_length =
-                physical_length.saturating_add(u64::try_from(consumed).unwrap_or(u64::MAX));
+            physical_length += consumed as u64;
             self.reader.consume(consumed);
 
             if lf_index.is_some() {
@@ -289,65 +133,161 @@ impl<R: Read> JsonlSourceReader<R> {
         line_number: u64,
         byte_offset: u64,
     ) -> Result<Option<SourceRecord>, SourceIngestionError> {
+        let invalid = |reason: String| SourceIngestionError::Invalid {
+            line_number,
+            byte_offset,
+            reason,
+        };
+        let malformed = |source| SourceIngestionError::MalformedJson {
+            line_number,
+            byte_offset,
+            source,
+        };
         if source_bytes.is_empty() {
-            return Err(SourceIngestionError::EmptyLine {
-                line_number,
-                byte_offset,
-            });
+            return Err(invalid("is empty".to_owned()));
         }
-        let text =
-            str::from_utf8(&source_bytes).map_err(|error| SourceIngestionError::InvalidUtf8 {
-                line_number,
-                byte_offset,
-                valid_up_to: error.valid_up_to(),
-            })?;
+        let text = str::from_utf8(&source_bytes).map_err(|error| {
+            invalid(format!(
+                "is not UTF-8 (valid through byte {})",
+                error.valid_up_to()
+            ))
+        })?;
         if !text.trim_start().starts_with('{') {
-            return Err(SourceIngestionError::NonObject {
-                line_number,
-                byte_offset,
-            });
+            return Err(invalid("is not a JSON object".to_owned()));
         }
-        let routing: RoutingObject<'_> =
-            serde_json::from_str(text).map_err(|source| SourceIngestionError::MalformedJson {
-                line_number,
-                byte_offset,
-                source,
-            })?;
-
+        let routing: RoutingObject<'_> = serde_json::from_str(text).map_err(malformed)?;
         let Some(lang_code) = routing.lang_code else {
             return Ok(None);
         };
         let RoutingString::String(lang_code) = lang_code else {
-            return Err(SourceIngestionError::InvalidLangCode {
-                line_number,
-                byte_offset,
-                actual: lang_code.json_type(),
-            });
+            return Err(invalid(format!(
+                "has {} `lang_code`; expected a string",
+                lang_code.json_type()
+            )));
         };
         if lang_code != self.selected_lang_code {
             return Ok(None);
         }
 
-        let TopLevelObject(object) =
-            serde_json::from_str(text).map_err(|source| SourceIngestionError::MalformedJson {
-                line_number,
-                byte_offset,
-                source,
-            })?;
-        let word = required_word(&object, line_number, byte_offset)?;
-        let routing_forms =
-            routing_forms(&object, line_number, byte_offset, self.max_routing_forms)?;
+        let TopLevelObject(object) = serde_json::from_str(text).map_err(malformed)?;
+        let word = match object.get("word") {
+            Some(Value::String(word)) if !word.is_empty() => word.clone(),
+            Some(Value::String(_)) => return Err(invalid("has an empty `word`".to_owned())),
+            Some(other) => {
+                return Err(invalid(format!(
+                    "has {} `word`; expected a string",
+                    json_type(other)
+                )));
+            }
+            None => return Err(invalid("has no `word`".to_owned())),
+        };
+        let routing_forms = routing_forms(&object).map_err(invalid)?;
         Ok(Some(SourceRecord {
             line_number,
             byte_offset,
             source_bytes,
             word,
             routing_forms,
-            object,
         }))
     }
 }
 
+fn routing_forms(object: &Map<String, Value>) -> Result<Vec<String>, String> {
+    let Some(forms) = object.get("forms") else {
+        return Ok(Vec::new());
+    };
+    let Value::Array(forms) = forms else {
+        return Err(format!(
+            "has {} `forms`; expected an array",
+            json_type(forms)
+        ));
+    };
+    let mut routing_forms = Vec::new();
+    for (index, form) in forms.iter().enumerate() {
+        let Value::Object(form) = form else {
+            return Err(format!(
+                "has {} `forms[{index}]`; expected an object",
+                json_type(form)
+            ));
+        };
+        let value = match form.get("form") {
+            Some(Value::String(value)) => value,
+            Some(other) => {
+                return Err(format!(
+                    "has {} `forms[{index}].form`; expected a string",
+                    json_type(other)
+                ));
+            }
+            None => return Err(format!("has no `forms[{index}].form`")),
+        };
+        if value.is_empty() || value == "-" {
+            continue;
+        }
+        if routing_forms.len() == MAX_ROUTING_FORMS {
+            return Err(format!(
+                "exceeds the {MAX_ROUTING_FORMS}-routing-form limit"
+            ));
+        }
+        routing_forms.push(value.clone());
+    }
+    Ok(routing_forms)
+}
+
+const fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+impl<R: Read> Iterator for JsonlSourceReader<R> {
+    type Item = Result<SourceRecord, SourceIngestionError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.finished {
+            let line_number = self.next_line_number;
+            let byte_offset = self.next_byte_offset;
+            let (source_bytes, discarded, physical_length) = match self.read_line() {
+                Ok(Some(read)) => read,
+                Ok(None) => {
+                    self.finished = true;
+                    return None;
+                }
+                Err(source) => {
+                    self.finished = true;
+                    return Some(Err(SourceIngestionError::Io {
+                        line_number,
+                        byte_offset,
+                        source,
+                    }));
+                }
+            };
+            self.next_byte_offset += physical_length;
+            self.next_line_number += 1;
+            self.source_record_count += 1;
+
+            if discarded || source_bytes.len() > self.max_line_bytes {
+                return Some(Err(SourceIngestionError::LineTooLong {
+                    line_number,
+                    byte_offset,
+                    max_bytes: self.max_line_bytes,
+                }));
+            }
+            match self.process_line(source_bytes, line_number, byte_offset) {
+                Ok(Some(record)) => return Some(Ok(record)),
+                Ok(None) => {}
+                Err(error) => return Some(Err(error)),
+            }
+        }
+        None
+    }
+}
+
+/// Only the `lang_code` of a line, read without materializing unselected records.
 struct RoutingObject<'a> {
     lang_code: Option<RoutingString<'a>>,
 }
@@ -497,6 +437,7 @@ impl<'de> Deserialize<'de> for RoutingString<'de> {
     }
 }
 
+/// A selected line as an object, rejecting duplicate top-level fields.
 struct TopLevelObject(Map<String, Value>);
 
 impl<'de> Deserialize<'de> for TopLevelObject {
@@ -527,167 +468,21 @@ impl<'de> Deserialize<'de> for TopLevelObject {
     }
 }
 
-impl<R: Read> Iterator for JsonlSourceReader<R> {
-    type Item = Result<SourceRecord, SourceIngestionError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while !self.finished {
-            let line_number = self.next_line_number;
-            let byte_offset = self.next_byte_offset;
-            let read = match self.read_line() {
-                Ok(Some(read)) => read,
-                Ok(None) => {
-                    self.finished = true;
-                    return None;
-                }
-                Err(source) => {
-                    self.finished = true;
-                    return Some(Err(SourceIngestionError::Io {
-                        line_number,
-                        byte_offset,
-                        source,
-                    }));
-                }
-            };
-            let (source_bytes, discarded, physical_length) = read;
-            let Some(next_byte_offset) = byte_offset.checked_add(physical_length) else {
-                self.finished = true;
-                return Some(Err(SourceIngestionError::PositionOverflow {
-                    line_number,
-                    byte_offset,
-                }));
-            };
-            let Some(next_line_number) = line_number.checked_add(1) else {
-                self.finished = true;
-                return Some(Err(SourceIngestionError::PositionOverflow {
-                    line_number,
-                    byte_offset,
-                }));
-            };
-            self.next_byte_offset = next_byte_offset;
-            self.next_line_number = next_line_number;
-            self.source_record_count = self.source_record_count.saturating_add(1);
-
-            if discarded || source_bytes.len() > self.max_line_bytes {
-                return Some(Err(SourceIngestionError::LineTooLong {
-                    line_number,
-                    byte_offset,
-                    max_bytes: self.max_line_bytes,
-                }));
-            }
-            match self.process_line(source_bytes, line_number, byte_offset) {
-                Ok(Some(record)) => return Some(Ok(record)),
-                Ok(None) => {}
-                Err(error) => return Some(Err(error)),
-            }
-        }
-        None
-    }
-}
-
-fn required_word(
-    object: &Map<String, Value>,
-    line_number: u64,
-    byte_offset: u64,
-) -> Result<String, SourceIngestionError> {
-    let word = object
-        .get("word")
-        .ok_or(SourceIngestionError::MissingWord {
-            line_number,
-            byte_offset,
-        })?;
-    let Value::String(word) = word else {
-        return Err(SourceIngestionError::InvalidWord {
-            line_number,
-            byte_offset,
-            actual: json_type(word),
-        });
-    };
-    if word.is_empty() {
-        return Err(SourceIngestionError::EmptyWord {
-            line_number,
-            byte_offset,
-        });
-    }
-    Ok(word.clone())
-}
-
-fn routing_forms(
-    object: &Map<String, Value>,
-    line_number: u64,
-    byte_offset: u64,
-    max_forms: usize,
-) -> Result<Vec<String>, SourceIngestionError> {
-    let Some(forms) = object.get("forms") else {
-        return Ok(Vec::new());
-    };
-    let Value::Array(forms) = forms else {
-        return Err(SourceIngestionError::InvalidForms {
-            line_number,
-            byte_offset,
-            actual: json_type(forms),
-        });
-    };
-
-    let mut routing_forms = Vec::new();
-    for (index, form) in forms.iter().enumerate() {
-        let Value::Object(form) = form else {
-            return Err(SourceIngestionError::InvalidFormEntry {
-                line_number,
-                byte_offset,
-                index,
-                actual: json_type(form),
-            });
-        };
-        let value = form.get("form").ok_or(SourceIngestionError::MissingForm {
-            line_number,
-            byte_offset,
-            index,
-        })?;
-        let Value::String(value) = value else {
-            return Err(SourceIngestionError::InvalidForm {
-                line_number,
-                byte_offset,
-                index,
-                actual: json_type(value),
-            });
-        };
-        if value.is_empty() || value == "-" {
-            continue;
-        }
-        if routing_forms.len() == max_forms {
-            return Err(SourceIngestionError::TooManyRoutingForms {
-                line_number,
-                byte_offset,
-                max_forms,
-            });
-        }
-        routing_forms.push(value.clone());
-    }
-    Ok(routing_forms)
-}
-
-const fn json_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
-    use super::{JsonlSourceReader, SourceIngestionError};
-
-    const LIMIT: usize = 1_024;
+    use super::{JsonlSourceReader, MAX_ROUTING_FORMS, SourceIngestionError};
 
     fn reader(input: &[u8]) -> JsonlSourceReader<Cursor<&[u8]>> {
-        JsonlSourceReader::new(Cursor::new(input), "en", LIMIT, 4)
+        JsonlSourceReader::new(Cursor::new(input), "en", 1_024)
+    }
+
+    fn reason(error: SourceIngestionError) -> String {
+        match error {
+            SourceIngestionError::Invalid { reason, .. } => reason,
+            other => panic!("expected an invalid record, got {other}"),
+        }
     }
 
     #[test]
@@ -699,15 +494,14 @@ mod tests {
         );
         let records = reader(input.as_bytes())
             .collect::<Result<Vec<_>, _>>()
-            .expect("valid source");
+            .unwrap();
 
         assert_eq!(records.len(), 2);
         assert_eq!(
             records[0].source_bytes,
             br#"{"lang_code":"en","word":"one"}"#
         );
-        assert_eq!(records[0].line_number, 1);
-        assert_eq!(records[0].byte_offset, 0);
+        assert_eq!((records[0].line_number, records[0].byte_offset), (1, 0));
         assert_eq!(
             records[1].source_bytes,
             "{\"lang_code\":\"en\",\"word\":\"三\"}".as_bytes()
@@ -715,167 +509,109 @@ mod tests {
         assert_eq!(records[1].line_number, 3);
         assert_eq!(
             records[1].byte_offset,
-            u64::try_from(
-                input
-                    .find("{\"lang_code\":\"en\",\"word\":\"三\"}")
-                    .expect("third line")
-            )
-            .expect("offset fits")
+            input
+                .find("{\"lang_code\":\"en\",\"word\":\"三\"}")
+                .unwrap() as u64
         );
         assert_eq!(records[1].word, "三");
     }
 
     #[test]
-    fn rejects_lf_and_crlf_empty_lines() {
+    fn rejects_empty_lines_and_preserves_a_final_carriage_return() {
         for input in [b"\n".as_slice(), b"\r\n".as_slice()] {
-            assert!(matches!(
-                reader(input).next().expect("error"),
-                Err(SourceIngestionError::EmptyLine {
-                    line_number: 1,
-                    byte_offset: 0
-                })
-            ));
+            assert_eq!(
+                reason(reader(input).next().unwrap().unwrap_err()),
+                "is empty"
+            );
         }
+        let input = b"{\"lang_code\":\"en\",\"word\":\"x\"}\r";
+        assert_eq!(reader(input).next().unwrap().unwrap().source_bytes, input);
     }
 
     #[test]
     fn rejects_oversized_lines_without_losing_the_next_line() {
         let input =
             b"12345678901234567890123456789012345678901\n{\"lang_code\":\"en\",\"word\":\"ok\"}\n";
-        let mut records = JsonlSourceReader::new(Cursor::new(input), "en", 40, 4);
+        let mut records = JsonlSourceReader::new(Cursor::new(input), "en", 40);
         assert!(matches!(
-            records.next().expect("size error"),
+            records.next().unwrap(),
             Err(SourceIngestionError::LineTooLong { max_bytes: 40, .. })
         ));
-        let record = records.next().expect("record").expect("valid record");
-        assert_eq!(record.line_number, 2);
-        assert_eq!(record.byte_offset, 42);
-    }
-
-    #[test]
-    fn accepts_exact_bound_before_crlf() {
-        let input = b"{}\r\n";
-        let mut records = JsonlSourceReader::new(Cursor::new(input), "en", 2, 4);
-        assert!(records.next().is_none());
-    }
-
-    #[test]
-    fn preserves_a_final_carriage_return_without_lf() {
-        let input = b"{\"lang_code\":\"en\",\"word\":\"x\"}\r";
-        let record = reader(input).next().expect("record").expect("valid record");
-        assert_eq!(record.source_bytes, input);
-    }
-
-    #[test]
-    fn rejects_invalid_utf8_json_and_non_objects() {
-        assert!(matches!(
-            reader(b"{\"lang_code\":\"en\",\"word\":\"\xff\"}\n")
+        let record = records.next().unwrap().unwrap();
+        assert_eq!((record.line_number, record.byte_offset), (2, 42));
+        assert!(
+            JsonlSourceReader::new(Cursor::new(b"{}\r\n"), "en", 2)
                 .next()
-                .expect("UTF-8 error"),
-            Err(SourceIngestionError::InvalidUtf8 { .. })
-        ));
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_utf8_json_non_objects_and_duplicate_fields() {
+        assert!(
+            reason(
+                reader(b"{\"lang_code\":\"en\",\"word\":\"\xff\"}\n")
+                    .next()
+                    .unwrap()
+                    .unwrap_err()
+            )
+            .starts_with("is not UTF-8")
+        );
         assert!(matches!(
-            reader(b"{not json}\n").next().expect("JSON error"),
+            reader(b"{not json}\n").next().unwrap(),
             Err(SourceIngestionError::MalformedJson { .. })
         ));
-        assert!(matches!(
-            reader(b"[]\n").next().expect("object error"),
-            Err(SourceIngestionError::NonObject { .. })
-        ));
-    }
-
-    #[test]
-    fn rejects_duplicate_top_level_fields() {
-        let error = reader(
-            br#"{"lang_code":"en","word":"one","word":"two"}
-"#,
-        )
-        .next()
-        .unwrap()
-        .unwrap_err();
-        assert!(matches!(error, SourceIngestionError::MalformedJson { .. }));
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate top-level field `word`")
+        assert_eq!(
+            reason(reader(b"[]\n").next().unwrap().unwrap_err()),
+            "is not a JSON object"
         );
+        for input in [
+            br#"{"lang_code":"en","word":"one","word":"two"}"#.as_slice(),
+            br#"{"unknown":{"large":[1,2,3]},"lang_code":"fr","unknown":null}"#.as_slice(),
+        ] {
+            let error = reader(input).next().unwrap().unwrap_err();
+            assert!(matches!(error, SourceIngestionError::MalformedJson { .. }));
+            assert!(error.to_string().contains("duplicate top-level field"));
+        }
     }
 
     #[test]
-    fn rejects_duplicate_unknown_fields_on_unselected_records() {
-        let error = reader(br#"{"unknown":{"large":[1,2,3]},"lang_code":"fr","unknown":null}"#)
-            .next()
-            .expect("duplicate error")
-            .expect_err("duplicate must be rejected");
-        assert!(matches!(error, SourceIngestionError::MalformedJson { .. }));
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate top-level field `unknown`")
-        );
-    }
-
-    #[test]
-    fn skips_redirects_and_other_languages_but_rejects_mistyped_language() {
+    fn skips_other_languages_and_requires_a_string_language_and_word() {
         let input = concat!(
             "{\"redirect\":\"target\"}\n",
             "{\"lang_code\":\"fr\",\"word\":false}\n",
             "{\"lang_code\":7,\"word\":\"bad\"}\n"
         );
-        let error = reader(input.as_bytes()).next().expect("language error");
-        assert!(matches!(
-            error,
-            Err(SourceIngestionError::InvalidLangCode {
-                line_number: 3,
-                byte_offset: _,
-                actual: "number"
-            })
-        ));
-    }
-
-    #[test]
-    fn requires_a_non_empty_string_word_only_for_selected_records() {
+        assert_eq!(
+            reason(reader(input.as_bytes()).next().unwrap().unwrap_err()),
+            "has number `lang_code`; expected a string"
+        );
         for (input, expected) in [
-            (r#"{"lang_code":"en"}"#, "missing"),
-            (r#"{"lang_code":"en","word":null}"#, "invalid"),
-            (r#"{"lang_code":"en","word":""}"#, "empty"),
+            (r#"{"lang_code":"en"}"#, "has no `word`"),
+            (
+                r#"{"lang_code":"en","word":null}"#,
+                "has null `word`; expected a string",
+            ),
+            (r#"{"lang_code":"en","word":""}"#, "has an empty `word`"),
         ] {
-            let error = reader(input.as_bytes()).next().expect("word error");
-            assert!(
-                matches!(
-                    (&error, expected),
-                    (Err(SourceIngestionError::MissingWord { .. }), "missing")
-                        | (Err(SourceIngestionError::InvalidWord { .. }), "invalid")
-                        | (Err(SourceIngestionError::EmptyWord { .. }), "empty")
-                ),
-                "unexpected result: {error:?}"
+            assert_eq!(
+                reason(reader(input.as_bytes()).next().unwrap().unwrap_err()),
+                expected
             );
         }
     }
 
     #[test]
-    fn extracts_unicode_routing_forms_and_excludes_placeholders() {
+    fn extracts_unicode_routing_forms_in_any_field_order() {
         let input = concat!(
-            "{\"lang_code\":\"en\",\"word\":\"café\",",
-            "\"forms\":[{\"form\":\"cafés\",\"tags\":[\"plural\"]},",
+            "{\"forms\":[{\"form\":\"cafés\",\"tags\":[\"plural\"]},",
             "{\"form\":\"\"},{\"form\":\"-\"},{\"form\":\"咖啡\"}],",
-            "\"unknown\":true}\n"
+            "\"word\":\"café\",\"unknown\":true,\"lang_code\":\"en\"}\n"
         );
-        let record = reader(input.as_bytes())
-            .next()
-            .expect("record")
-            .expect("valid record");
+        let record = reader(input.as_bytes()).next().unwrap().unwrap();
         assert_eq!(record.word, "café");
         assert_eq!(record.routing_forms, ["cafés", "咖啡"]);
         assert_eq!(record.source_bytes, input.trim_end().as_bytes());
-    }
-
-    #[test]
-    fn selects_when_word_and_forms_precede_language() {
-        let input = br#"{"forms":[{"form":"before"}],"word":"ordered","lang_code":"en"}"#;
-        let record = reader(input).next().expect("record").expect("valid record");
-        assert_eq!(record.word, "ordered");
-        assert_eq!(record.routing_forms, ["before"]);
     }
 
     #[test]
@@ -888,60 +624,39 @@ mod tests {
              {{\"lang_code\":\"en\",\"word\":\"selected\"}}\n",
             values.join(",")
         );
-        let mut records = JsonlSourceReader::new(Cursor::new(input.as_bytes()), "en", 16_384, 4);
-        let record = records
+        let record = JsonlSourceReader::new(Cursor::new(input.as_bytes()), "en", 16_384)
             .next()
-            .expect("selected record")
-            .expect("valid source");
-        assert_eq!(record.line_number, 2);
-        assert_eq!(record.word, "selected");
+            .unwrap()
+            .unwrap();
+        assert_eq!((record.line_number, record.word.as_str()), (2, "selected"));
     }
 
     #[test]
-    fn retains_selected_object_for_crate_internal_consumers() {
-        let input = br#"{"word":"kept","lang_code":"en","senses":[{"glosses":["fact"]}]}"#;
-        let record = reader(input).next().expect("record").expect("valid record");
-        assert_eq!(record.object.get("word"), Some(&serde_json::json!("kept")));
-        assert_eq!(
-            record.object.get("senses"),
-            Some(&serde_json::json!([{"glosses": ["fact"]}]))
-        );
-    }
-
-    #[test]
-    fn rejects_incompatible_forms_shapes() {
-        let cases = [
-            (r#""bad""#, "forms"),
-            (r#"["bad"]"#, "entry"),
-            (r"[{}]", "missing"),
-            (r#"[{"form":3}]"#, "form"),
-        ];
-        for (forms, expected) in cases {
+    fn rejects_incompatible_forms_shapes_and_bounds_routing_forms() {
+        for (forms, expected) in [
+            (r#""bad""#, "has string `forms`; expected an array"),
+            (r#"["bad"]"#, "has string `forms[0]`; expected an object"),
+            (r"[{}]", "has no `forms[0].form`"),
+            (
+                r#"[{"form":3}]"#,
+                "has number `forms[0].form`; expected a string",
+            ),
+        ] {
             let input = format!(r#"{{"lang_code":"en","word":"x","forms":{forms}}}"#);
-            let error = reader(input.as_bytes()).next().expect("forms error");
-            assert!(
-                matches!(
-                    (&error, expected),
-                    (Err(SourceIngestionError::InvalidForms { .. }), "forms")
-                        | (Err(SourceIngestionError::InvalidFormEntry { .. }), "entry")
-                        | (Err(SourceIngestionError::MissingForm { .. }), "missing")
-                        | (Err(SourceIngestionError::InvalidForm { .. }), "form")
-                ),
-                "unexpected result: {error:?}"
+            assert_eq!(
+                reason(reader(input.as_bytes()).next().unwrap().unwrap_err()),
+                expected
             );
         }
-    }
-
-    #[test]
-    fn bounds_retained_routing_forms() {
-        let input =
-            br#"{"lang_code":"en","word":"x","forms":[{"form":"a"},{"form":""},{"form":"b"}]}"#;
-        let error = JsonlSourceReader::new(Cursor::new(input), "en", LIMIT, 1)
+        let forms = (0..=MAX_ROUTING_FORMS)
+            .map(|index| format!("{{\"form\":\"f{index}\"}}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let input = format!(r#"{{"lang_code":"en","word":"x","forms":[{forms}]}}"#);
+        let error = JsonlSourceReader::new(Cursor::new(input.as_bytes()), "en", 1 << 20)
             .next()
-            .expect("forms error");
-        assert!(matches!(
-            error,
-            Err(SourceIngestionError::TooManyRoutingForms { max_forms: 1, .. })
-        ));
+            .unwrap()
+            .unwrap_err();
+        assert!(reason(error).contains("routing-form limit"));
     }
 }

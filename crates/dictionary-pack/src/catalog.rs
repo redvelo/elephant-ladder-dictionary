@@ -1,15 +1,14 @@
 use std::collections::BTreeSet;
-use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::AudioDelivery;
 use crate::{
-    AUDIO_MANIFEST_FILE, ExpectedPack, PACK_MANIFEST_FILE, PackId, PackRevision, Sha256Hex,
+    AUDIO_MANIFEST_FILE, AudioDelivery, ExpectedPack, PACK_MANIFEST_FILE, PackId, PackRevision,
+    Sha256Hex,
 };
 
-/// The release asset name of a version-1 catalog.
+/// The committed name of a version-1 catalog.
 pub const CATALOG_FILE: &str = "catalog-v1.json";
 pub const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CATALOG_PACKS: usize = 256;
@@ -55,15 +54,14 @@ impl CatalogPack {
     ///
     /// # Panics
     ///
-    /// Never for a pack returned by [`verify_catalog`], which validates the pack
-    /// identifier and manifest asset.
+    /// Never for a pack of a catalog returned by [`parse_catalog`], which requires the
+    /// manifest asset.
     #[must_use]
     pub fn expected_pack(&self) -> ExpectedPack {
         let release = self.release();
         ExpectedPack {
-            pack_id: PackId::from_str(&release.pack_id)
-                .expect("catalog pack identifier was validated"),
-            pack_revision: PackRevision::from_bytes(*release.pack_revision.as_bytes()),
+            pack_id: release.pack_id.clone(),
+            pack_revision: release.pack_revision,
             manifest_sha256: release
                 .assets
                 .iter()
@@ -78,8 +76,8 @@ impl CatalogPack {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackRelease {
-    pub pack_id: String,
-    pub pack_revision: Sha256Hex,
+    pub pack_id: PackId,
+    pub pack_revision: PackRevision,
     pub minimum_app_version: String,
     /// Sum of every asset size, which is also the installed size.
     pub installed_bytes: u64,
@@ -121,7 +119,7 @@ pub struct AudioPack {
 }
 
 /// Referenced recordings of an audio collection by status.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordingCounts {
     pub available: u64,
@@ -131,7 +129,6 @@ pub struct RecordingCounts {
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum CatalogError {
     #[error("catalog exceeds {MAX_CATALOG_BYTES} bytes")]
     TooLarge,
@@ -173,7 +170,7 @@ pub fn validate_catalog(catalog: &Catalog) -> Result<(), CatalogError> {
     for pack in &catalog.packs {
         let release = pack.release();
         validate_release(release, pack.manifest_file())?;
-        if !identities.insert((release.pack_id.as_str(), release.pack_revision)) {
+        if !identities.insert((&release.pack_id, release.pack_revision)) {
             return invalid(format!(
                 "duplicate pack revision {}/{}",
                 release.pack_id, release.pack_revision
@@ -210,7 +207,6 @@ pub fn validate_catalog(catalog: &Catalog) -> Result<(), CatalogError> {
 }
 
 fn validate_release(release: &PackRelease, manifest_file: &str) -> Result<(), CatalogError> {
-    PackId::from_str(&release.pack_id).map_err(|error| CatalogError::Invalid(error.to_string()))?;
     text("minimum_app_version", &release.minimum_app_version)?;
     if release.assets.is_empty() || release.assets.len() > MAX_PACK_ASSETS {
         return Err(CatalogError::Invalid(format!(

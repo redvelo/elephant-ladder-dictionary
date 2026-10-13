@@ -1,21 +1,19 @@
 use std::{fmt, str::FromStr};
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
 
-use crate::{PackError, UNICODE_PROFILE};
+use crate::{COMPRESSION_PROFILE, FORMAT_VERSION, PackError, ROUTING_POLICY, UNICODE_PROFILE};
 
 const PACK_REVISION_DOMAIN: &[u8] = b"ELDICT-PACK-REVISION-V1";
-const AUDIO_REVISION_DOMAIN: &[u8] = b"ELDICT-AUDIO-REVISION-V1";
 const ENTRY_ID_DOMAIN: &[u8] = b"ELDICT-ENTRY-ID-V1";
-const SNAPSHOT_REVISION_DOMAIN: &[u8] = b"ELDICT-SNAPSHOT-V1";
 const MAX_PACK_ID_BYTES: usize = 64;
 
-/// A stable, path-safe corpus identity independent of a pack revision.
+/// A stable, path-safe pack identity independent of a pack revision.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PackId(String);
 
 impl PackId {
-    /// Returns the validated identifier.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -51,131 +49,106 @@ impl FromStr for PackId {
     }
 }
 
-/// Inputs that define one immutable physical corpus revision.
-#[derive(Clone, Copy, Debug)]
-pub struct PackRevisionInputs<'a> {
-    pub pack_id: &'a PackId,
-    pub corpus_language: &'a str,
-    pub wiktionary_edition: &'a str,
-    pub wiktionary_dump_date: &'a str,
-    pub kaikki_extraction_date: &'a str,
-    pub source_url: &'a str,
-    pub compressed_source_sha256: &'a [u8; 32],
-    pub uncompressed_source_sha256: &'a [u8; 32],
-    pub wiktextract_revision: &'a str,
-    pub wikitextprocessor_revision: &'a str,
-    pub builder_revision: &'a str,
-    pub compression_profile: &'a str,
-    pub routing_policy: &'a str,
-    pub target_shard_payload_bytes: u64,
-    pub source_manifest_sha256: &'a [u8; 32],
-    pub license_manifest_sha256: &'a [u8; 32],
-    pub compatible_audio_collection: Option<&'a str>,
-    pub minimum_app_version: &'a str,
-}
-
-/// Inputs that define one immutable audio collection revision.
-#[derive(Clone, Copy, Debug)]
-pub struct AudioRevisionInputs<'a> {
-    pub pack_id: &'a PackId,
-    pub corpus_language: &'a str,
-    pub source_corpus_pack_id: &'a PackId,
-    pub source_corpus_revision: &'a PackRevision,
-    pub acquired_at: &'a str,
-    pub encoder_profile: &'a str,
-    pub builder_revision: &'a str,
-    pub delivery: &'a str,
-    pub chunk_count: u64,
-    /// Digest of every recording's acquired facts, in file name order.
-    pub recording_input_digest: &'a [u8; 32],
-    pub minimum_app_version: &'a str,
-}
-
-/// The digest identity of one immutable pack revision.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct PackRevision([u8; 32]);
-
-impl PackRevision {
-    /// Derives a revision from every format input that can affect pack behavior.
-    #[must_use]
-    pub fn derive(inputs: PackRevisionInputs<'_>) -> Self {
-        let mut digest = FramedDigest::new(PACK_REVISION_DOMAIN);
-        digest.field(&crate::FORMAT_VERSION.to_be_bytes());
-        digest.field(inputs.pack_id.as_str().as_bytes());
-        digest.field(inputs.corpus_language.as_bytes());
-        digest.field(inputs.wiktionary_edition.as_bytes());
-        digest.field(inputs.wiktionary_dump_date.as_bytes());
-        digest.field(inputs.kaikki_extraction_date.as_bytes());
-        digest.field(inputs.source_url.as_bytes());
-        digest.field(inputs.compressed_source_sha256);
-        digest.field(inputs.uncompressed_source_sha256);
-        digest.field(inputs.wiktextract_revision.as_bytes());
-        digest.field(inputs.wikitextprocessor_revision.as_bytes());
-        digest.field(inputs.builder_revision.as_bytes());
-        digest.field(UNICODE_PROFILE.as_bytes());
-        digest.field(inputs.compression_profile.as_bytes());
-        digest.field(inputs.routing_policy.as_bytes());
-        digest.field(&inputs.target_shard_payload_bytes.to_be_bytes());
-        digest.field(inputs.source_manifest_sha256);
-        digest.field(inputs.license_manifest_sha256);
-        digest.field(inputs.compatible_audio_collection.unwrap_or("").as_bytes());
-        digest.field(inputs.minimum_app_version.as_bytes());
-        Self(digest.finish())
-    }
-
-    /// Derives an audio collection revision from every input that affects its bytes.
-    #[must_use]
-    pub fn derive_audio(inputs: AudioRevisionInputs<'_>) -> Self {
-        let mut digest = FramedDigest::new(AUDIO_REVISION_DOMAIN);
-        digest.field(&crate::FORMAT_VERSION.to_be_bytes());
-        digest.field(inputs.pack_id.as_str().as_bytes());
-        digest.field(inputs.corpus_language.as_bytes());
-        digest.field(inputs.source_corpus_pack_id.as_str().as_bytes());
-        digest.field(inputs.source_corpus_revision.as_bytes());
-        digest.field(inputs.acquired_at.as_bytes());
-        digest.field(inputs.encoder_profile.as_bytes());
-        digest.field(inputs.builder_revision.as_bytes());
-        digest.field(inputs.delivery.as_bytes());
-        digest.field(&inputs.chunk_count.to_be_bytes());
-        digest.field(inputs.recording_input_digest);
-        digest.field(inputs.minimum_app_version.as_bytes());
-        Self(digest.finish())
-    }
-
-    /// Creates a revision from an already validated digest.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// Returns the binary digest used in databases and manifests.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-
-    /// Returns the lowercase hexadecimal representation.
-    #[must_use]
-    pub fn to_hex(self) -> String {
-        hex::encode(self.0)
+impl Serialize for PackId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
     }
 }
 
-impl From<[u8; 32]> for PackRevision {
-    fn from(value: [u8; 32]) -> Self {
-        Self(value)
+impl<'de> Deserialize<'de> for PackId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(de::Error::custom)
     }
 }
 
-impl fmt::Display for PackRevision {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&hex::encode(self.0))
-    }
+macro_rules! digest_type {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+        pub struct $name([u8; 32]);
+
+        impl $name {
+            #[must_use]
+            pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+                Self(bytes)
+            }
+
+            #[must_use]
+            pub const fn as_bytes(&self) -> &[u8; 32] {
+                &self.0
+            }
+
+            #[must_use]
+            pub fn to_hex(self) -> String {
+                hex::encode(self.0)
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "{}({})", stringify!($name), hex::encode(self.0))
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(&hex::encode(self.0))
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = &'static str;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                if value.len() != 64
+                    || !value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err("expected exactly 64 lowercase hexadecimal SHA-256 characters");
+                }
+                let mut bytes = [0; 32];
+                hex::decode_to_slice(value, &mut bytes)
+                    .map_err(|_| "invalid SHA-256 hexadecimal value")?;
+                Ok(Self(bytes))
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(&hex::encode(self.0))
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let value = String::deserialize(deserializer)?;
+                value.parse().map_err(de::Error::custom)
+            }
+        }
+    };
 }
 
-/// A stable record identity scoped to one pack revision.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct EntryId([u8; 32]);
+digest_type! {
+    /// A SHA-256 value serialized as exactly 64 lowercase hexadecimal characters.
+    Sha256Hex
+}
+
+digest_type! {
+    /// The digest identity of one immutable pack revision.
+    PackRevision
+}
+
+digest_type! {
+    /// A stable record identity scoped to one pack revision.
+    EntryId
+}
+
+digest_type! {
+    /// The digest of an immutable ordered view configuration.
+    SnapshotRevision
+}
 
 impl EntryId {
     /// Derives an entry identity from its source position and exact record bytes.
@@ -191,124 +164,124 @@ impl EntryId {
         digest.field(record_sha256);
         Self(digest.finish())
     }
+}
 
-    /// Returns the binary digest used in databases and entry references.
+/// The pinned inputs that define one immutable corpus pack revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CorpusIdentity {
+    pub pack_id: PackId,
+    pub corpus_language: String,
+    pub wiktionary_edition: String,
+    pub wiktionary_dump_date: String,
+    pub kaikki_extraction_date: String,
+    pub source_url: String,
+    pub compressed_source_sha256: Sha256Hex,
+    pub uncompressed_source_sha256: Sha256Hex,
+    pub wiktextract_revision: String,
+    pub wikitextprocessor_revision: String,
+    pub builder_revision: String,
+    pub target_shard_payload_bytes: u64,
+    /// Compact JSON describing the source extraction.
+    pub source_manifest: String,
+    /// Compact JSON describing the corpus licenses.
+    pub license_manifest: String,
+    pub minimum_app_version: String,
+}
+
+impl CorpusIdentity {
+    /// Derives the revision from every input that can affect pack behavior, including
+    /// the format version and the Unicode, compression, and routing profiles.
     #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn revision(&self) -> PackRevision {
+        let mut digest = FramedDigest::new(PACK_REVISION_DOMAIN);
+        digest.field(&FORMAT_VERSION.to_be_bytes());
+        digest.field(self.pack_id.as_str().as_bytes());
+        digest.field(self.corpus_language.as_bytes());
+        digest.field(self.wiktionary_edition.as_bytes());
+        digest.field(self.wiktionary_dump_date.as_bytes());
+        digest.field(self.kaikki_extraction_date.as_bytes());
+        digest.field(self.source_url.as_bytes());
+        digest.field(self.compressed_source_sha256.as_bytes());
+        digest.field(self.uncompressed_source_sha256.as_bytes());
+        digest.field(self.wiktextract_revision.as_bytes());
+        digest.field(self.wikitextprocessor_revision.as_bytes());
+        digest.field(self.builder_revision.as_bytes());
+        digest.field(UNICODE_PROFILE.as_bytes());
+        digest.field(COMPRESSION_PROFILE.as_bytes());
+        digest.field(ROUTING_POLICY.as_bytes());
+        digest.field(&self.target_shard_payload_bytes.to_be_bytes());
+        digest.field(self.source_manifest_sha256().as_bytes());
+        digest.field(self.license_manifest_sha256().as_bytes());
+        digest.field(b"");
+        digest.field(self.minimum_app_version.as_bytes());
+        PackRevision(digest.finish())
     }
 
-    /// Creates an entry identifier from validated pack storage bytes.
     #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub fn source_manifest_sha256(&self) -> Sha256Hex {
+        Sha256Hex(Sha256::digest(self.source_manifest.as_bytes()).into())
     }
 
-    /// Returns the lowercase hexadecimal representation.
     #[must_use]
-    pub fn to_hex(self) -> String {
-        hex::encode(self.0)
+    pub fn license_manifest_sha256(&self) -> Sha256Hex {
+        Sha256Hex(Sha256::digest(self.license_manifest.as_bytes()).into())
     }
 }
 
-/// The projection represented by an enabled dictionary view.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ViewType {
-    Monolingual,
-    Bilingual,
-}
-
-/// Identity facts for one ordered enabled view.
-#[derive(Clone, Copy, Debug)]
-pub struct SnapshotViewIdentity<'a> {
-    pub view_id: &'a str,
-    pub pack_id: &'a PackId,
-    pub pack_revision: &'a PackRevision,
-    pub view_type: ViewType,
-    pub target_language: Option<&'a str>,
-}
-
-/// The digest of an immutable ordered view configuration.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct SnapshotRevision([u8; 32]);
-
-impl SnapshotRevision {
-    /// Derives a revision while preserving view order.
-    #[must_use]
-    pub fn derive(views: &[SnapshotViewIdentity<'_>]) -> Self {
-        let mut digest = FramedDigest::new(SNAPSHOT_REVISION_DOMAIN);
-        digest.field(&(views.len() as u64).to_be_bytes());
-        for view in views {
-            digest.field(view.view_id.as_bytes());
-            digest.field(view.pack_id.as_str().as_bytes());
-            digest.field(view.pack_revision.as_bytes());
-            digest.field(match view.view_type {
-                ViewType::Monolingual => b"monolingual",
-                ViewType::Bilingual => b"bilingual",
-            });
-            digest.field(view.target_language.unwrap_or("").as_bytes());
-        }
-        Self(digest.finish())
-    }
-
-    /// Returns the binary snapshot digest.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-
-    /// Returns the lowercase hexadecimal representation.
-    #[must_use]
-    pub fn to_hex(self) -> String {
-        hex::encode(self.0)
-    }
-}
-
-struct FramedDigest(Sha256);
+/// A SHA-256 over length-prefixed fields, started with a domain separator.
+pub struct FramedDigest(Sha256);
 
 impl FramedDigest {
-    fn new(domain: &[u8]) -> Self {
-        let mut value = Self(Sha256::new());
-        value.field(domain);
-        value
+    #[must_use]
+    pub fn new(domain: &[u8]) -> Self {
+        let mut digest = Self(Sha256::new());
+        digest.field(domain);
+        digest
     }
 
-    fn field(&mut self, value: &[u8]) {
-        self.0.update((value.len() as u64).to_be_bytes());
-        self.0.update(value);
+    pub fn field(&mut self, bytes: &[u8]) {
+        self.0.update((bytes.len() as u64).to_be_bytes());
+        self.0.update(bytes);
     }
 
-    fn finish(self) -> [u8; 32] {
+    /// Frames presence, then the field when present.
+    pub fn optional(&mut self, bytes: Option<&[u8]>) {
+        match bytes {
+            Some(bytes) => {
+                self.0.update([1]);
+                self.field(bytes);
+            }
+            None => self.0.update([0]),
+        }
+    }
+
+    #[must_use]
+    pub fn finish(self) -> [u8; 32] {
         self.0.finalize().into()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
-    fn pack_inputs<'a>(pack_id: &'a PackId, source: &'a [u8; 32]) -> PackRevisionInputs<'a> {
-        PackRevisionInputs {
-            pack_id,
-            corpus_language: "en",
-            wiktionary_edition: "en",
-            wiktionary_dump_date: "2026-09-02",
-            kaikki_extraction_date: "2026-09-06",
-            source_url: "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz",
-            compressed_source_sha256: source,
-            uncompressed_source_sha256: &[2; 32],
-            wiktextract_revision: "ccec6f1",
-            wikitextprocessor_revision: "4deed51",
-            builder_revision: "builder-v1",
-            compression_profile: "zstd-v1-level-6",
-            routing_policy: "routing-v1",
+    fn identity(compressed: [u8; 32]) -> CorpusIdentity {
+        CorpusIdentity {
+            pack_id: "wiktionary-en-en".parse().unwrap(),
+            corpus_language: "en".to_owned(),
+            wiktionary_edition: "enwiktionary".to_owned(),
+            wiktionary_dump_date: "2026-09-02".to_owned(),
+            kaikki_extraction_date: "2026-09-06".to_owned(),
+            source_url: "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz".to_owned(),
+            compressed_source_sha256: Sha256Hex::from_bytes(compressed),
+            uncompressed_source_sha256: Sha256Hex::from_bytes([2; 32]),
+            wiktextract_revision: "ccec6f1".to_owned(),
+            wikitextprocessor_revision: "4deed51".to_owned(),
+            builder_revision: "builder-v1".to_owned(),
             target_shard_payload_bytes: 1_610_612_736,
-            source_manifest_sha256: &[3; 32],
-            license_manifest_sha256: &[4; 32],
-            compatible_audio_collection: None,
-            minimum_app_version: "0.1.0",
+            source_manifest: "{\"provider\":\"test\"}".to_owned(),
+            license_manifest: "{\"licenses\":[]}".to_owned(),
+            minimum_app_version: "0.1.0".to_owned(),
         }
     }
 
@@ -317,16 +290,29 @@ mod tests {
         assert!(PackId::from_str("wiktionary-en-en").is_ok());
         for invalid in ["", "-english", "english-", "English", "en_us", "en--us"] {
             assert!(PackId::from_str(invalid).is_err(), "accepted {invalid}");
+            assert!(serde_json::from_str::<PackId>(&format!("\"{invalid}\"")).is_err());
         }
     }
 
     #[test]
     fn every_pack_input_is_revision_significant() {
-        let pack_id = PackId::from_str("wiktionary-en-en").unwrap();
-        let first = PackRevision::derive(pack_inputs(&pack_id, &[1; 32]));
-        let second = PackRevision::derive(pack_inputs(&pack_id, &[9; 32]));
+        let first = identity([1; 32]).revision();
+        let second = identity([9; 32]).revision();
         assert_ne!(first, second);
         assert_eq!(first.to_hex().len(), 64);
+        assert_eq!(first.to_hex().parse::<PackRevision>().unwrap(), first);
+    }
+
+    #[test]
+    fn digests_round_trip_through_lowercase_hex_only() {
+        let hex = "0".repeat(63) + "a";
+        assert_eq!(hex.parse::<Sha256Hex>().unwrap().to_hex(), hex);
+        assert!(hex.to_uppercase().parse::<Sha256Hex>().is_err());
+        assert!("00".parse::<Sha256Hex>().is_err());
+        assert_eq!(
+            serde_json::to_string(&hex.parse::<EntryId>().unwrap()).unwrap(),
+            format!("\"{hex}\"")
+        );
     }
 
     #[test]
@@ -336,30 +322,6 @@ mod tests {
         assert_ne!(
             EntryId::derive(&revision, 10, &record),
             EntryId::derive(&revision, 11, &record)
-        );
-    }
-
-    #[test]
-    fn snapshot_identity_preserves_order_and_view_semantics() {
-        let pack_id = PackId::from_str("wiktionary-en-en").unwrap();
-        let revision = PackRevision::from_bytes([1; 32]);
-        let mono = SnapshotViewIdentity {
-            view_id: "english",
-            pack_id: &pack_id,
-            pack_revision: &revision,
-            view_type: ViewType::Monolingual,
-            target_language: None,
-        };
-        let bilingual = SnapshotViewIdentity {
-            view_id: "english-to-fr",
-            pack_id: &pack_id,
-            pack_revision: &revision,
-            view_type: ViewType::Bilingual,
-            target_language: Some("fr"),
-        };
-        assert_ne!(
-            SnapshotRevision::derive(&[mono, bilingual]),
-            SnapshotRevision::derive(&[bilingual, mono])
         );
     }
 }
