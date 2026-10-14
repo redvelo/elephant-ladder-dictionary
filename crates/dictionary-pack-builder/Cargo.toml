@@ -37,7 +37,7 @@ ureq.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
-tempfile = "3.22.0"
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

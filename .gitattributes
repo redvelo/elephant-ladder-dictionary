@@ -1,0 +1,10 @@
+# Fixtures are compared byte for byte against the SHA-256 and line ending their
+# provenance declares, so the working tree must not depend on the platform Git checked
+# out on. Without this, Git for Windows rewrites line endings and every digest fails.
+* text=auto eol=lf
+
+*.gz binary
+*.mp3 binary
+*.oga binary
+*.opus binary
+*.wav binary

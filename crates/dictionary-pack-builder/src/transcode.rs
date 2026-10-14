@@ -3,7 +3,8 @@ use std::io::{self, Cursor};
 use ogg::reading::PacketReader;
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use opus::{Application, Bitrate, Channels};
-use rubato::{FftFixedInOut, Resampler};
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
+use rubato::{Fft, FixedSync, Resampler};
 use symphonia::core::codecs::CodecParameters;
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
@@ -225,8 +226,9 @@ fn resample(samples: &[f32], rate: usize) -> Result<Vec<f32>, TranscodeError> {
     if rate == OPUS_RATE {
         return Ok(samples.to_vec());
     }
-    let mut resampler = FftFixedInOut::<f32>::new(rate, OPUS_RATE, RESAMPLER_CHUNK_FRAMES, 1)
-        .map_err(encode_error)?;
+    let mut resampler =
+        Fft::<f32>::new(rate, OPUS_RATE, RESAMPLER_CHUNK_FRAMES, 1, FixedSync::Both)
+            .map_err(encode_error)?;
     let delay = resampler.output_delay();
     let expected = (samples.len() * OPUS_RATE).div_ceil(rate);
     let mut output = Vec::with_capacity(expected + delay + RESAMPLER_CHUNK_FRAMES * 2);
@@ -237,8 +239,9 @@ fn resample(samples: &[f32], rate: usize) -> Result<Vec<f32>, TranscodeError> {
         let available = samples.len().saturating_sub(position).min(needed);
         chunk[..available].copy_from_slice(&samples[position..position + available]);
         position += available;
-        let processed = resampler.process(&[chunk], None).map_err(encode_error)?;
-        output.extend_from_slice(&processed[0]);
+        let input = InterleavedSlice::new(&chunk, 1, needed).map_err(encode_error)?;
+        let processed = resampler.process(&input, None).map_err(encode_error)?;
+        output.extend(processed.take_data());
     }
     Ok(output[delay..delay + expected].to_vec())
 }

@@ -26,24 +26,13 @@ Chinese, each with a monolingual view and a bilingual view to or from English.
 - `catalog-v1.json`: the published catalog. The application reads it from this
   repository's default branch over HTTPS and accepts each asset only on the SHA-256 the
   catalog declares.
-- `docs/`: the [pack format](docs/format.md) and the
-  [snapshot and publishing procedures](docs/sources.md).
-
-## What it is not
-
-- Not a general dictionary library. There is no StarDict, MDict, or DSL import, no fuzzy
-  search, and no morphology beyond the forms Wiktionary authored.
-- Not a service. Nothing here runs online; the application downloads a pack once and
-  reads it locally.
-- Not a source of truth for the data. Wiktionary is; this repository records which
-  extraction a pack was built from so the build can be reproduced.
 
 ## Build
 
-Rust 1.93 or newer, a C compiler, and Python 3.11 or newer for source capture. The CLI
-never downloads source data: packs are built only from snapshots mirrored into
-immutable releases of this repository, so a build reproduces after Kaikki replaces its
-archive.
+The Rust toolchain pinned in `rust-toolchain.toml`, a C compiler and CMake for libopus
+and SQLite, and Python 3.11 or newer for source capture. The CLI never downloads source
+data: packs are built only from snapshots mirrored into immutable releases of this
+repository, so a build reproduces after Kaikki replaces its archive.
 
 ```sh
 gzip -dc SOURCE.jsonl.gz | elephant-dictionary-pack build \
