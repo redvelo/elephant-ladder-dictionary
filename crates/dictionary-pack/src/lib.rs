@@ -35,7 +35,7 @@ pub use manifest::{PACK_MANIFEST_FILE, PackAsset, PackManifest};
 pub use pack::{
     AudioReferences, DictionaryPack, ExpectedPack, LookupMatch, LookupOptions, LookupOutcome,
     MAX_ASSETS, MAX_LOOKUP_RESULTS, MAX_QUERY_BYTES, MAX_ROUTING_FORMS, MAX_SECTION_PAGE_ITEMS,
-    ValidationReport,
+    ValidationReport, sqlite_path,
 };
 pub use semantic::{
     Bounded, Classifier, Descendant, EmphasisRange, Entry, EntryReference, Example, Form,

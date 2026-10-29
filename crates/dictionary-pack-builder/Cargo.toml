@@ -26,7 +26,6 @@ ogg = { workspace = true, optional = true }
 opus = { workspace = true, optional = true }
 rubato = { workspace = true, optional = true }
 rusqlite.workspace = true
-rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
@@ -41,3 +40,6 @@ tempfile = "3.27.0"
 
 [lints]
 workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true

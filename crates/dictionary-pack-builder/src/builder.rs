@@ -93,7 +93,7 @@ pub fn build_pack<R: Read>(
 
     let index_file_name = format!("{pack_id}-{revision}-index.eldict");
     let index_path = staging.path().join(&index_file_name);
-    let mut index = Connection::open(&index_path)?;
+    let mut index = Connection::open(elephant_ladder_dictionary_pack::sqlite_path(&index_path))?;
     index.execute_batch(INDEX_SCHEMA)?;
     configure_build_connection(&index)?;
     let transaction = index.transaction()?;
@@ -490,7 +490,7 @@ impl ShardWriter {
     ) -> Result<Self, BuildError> {
         let file_name = format!("{}-{revision}-data-{ordinal:03}.eldict", identity.pack_id);
         let path = directory.join(&file_name);
-        let connection = Connection::open(&path)?;
+        let connection = Connection::open(elephant_ladder_dictionary_pack::sqlite_path(&path))?;
         connection.execute_batch(DATA_SCHEMA)?;
         configure_build_connection(&connection)?;
         connection.execute_batch("BEGIN IMMEDIATE")?;
@@ -653,8 +653,12 @@ pub(crate) fn asset_for(role: &str, file_name: &str, path: &Path) -> Result<Pack
         digest.update(&buffer[..read]);
         size_bytes += read as u64;
     }
-    file.sync_all()
-        .map_err(|source| io_error("sync asset", path, source))?;
+    // `FlushFileBuffers` needs a writable handle, which this read-only one is not on
+    // Windows; asset durability there is covered by the fixture-only builder role.
+    if !cfg!(windows) {
+        file.sync_all()
+            .map_err(|source| io_error("sync asset", path, source))?;
+    }
     if size_bytes > MAX_ASSET_BYTES {
         return Err(BuildError::BuildLimit(format!(
             "asset `{file_name}` is {size_bytes} bytes; maximum is {MAX_ASSET_BYTES}"
@@ -669,6 +673,11 @@ pub(crate) fn asset_for(role: &str, file_name: &str, path: &Path) -> Result<Pack
 }
 
 pub(crate) fn sync_directory(path: &Path) -> Result<(), BuildError> {
+    // Windows cannot open a directory as a `File`; directory durability is a Unix
+    // build-host concern, and the builder runs on Windows only to build test fixtures.
+    if cfg!(windows) {
+        return Ok(());
+    }
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|source| io_error("sync directory", path, source))
@@ -748,6 +757,7 @@ impl StagingDirectory {
     }
 
     pub(crate) fn publish(&mut self, output: &Path) -> Result<(), BuildError> {
+        #[cfg(unix)]
         rustix::fs::renameat_with(
             rustix::fs::CWD,
             &self.path,
@@ -763,6 +773,16 @@ impl StagingDirectory {
                 io_error("publish staging directory", output, source)
             }
         })?;
+        // Windows has no no-replace rename; the builder runs there only to build test
+        // fixtures, where no publisher races another.
+        #[cfg(not(unix))]
+        {
+            if output.exists() {
+                return Err(BuildError::OutputExists(output.to_owned()));
+            }
+            fs::rename(&self.path, output)
+                .map_err(|source| io_error("publish staging directory", output, source))?;
+        }
         self.published = true;
         sync_directory(output.parent().unwrap_or_else(|| Path::new(".")))
     }

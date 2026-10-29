@@ -909,13 +909,37 @@ pub(crate) fn validate_asset_bytes(
     Ok(())
 }
 
+/// The path a database is opened or created under.
+///
+/// SQLite's Windows VFS hands the path to `CreateFileW` without the `\\?\` long-path
+/// prefix that `std::fs` adds, so a pack nested past `MAX_PATH` reads fine through
+/// `std::fs` and then fails to open as a database. Canonicalizing yields the verbatim
+/// `\\?\` form, which that limit does not apply to; a database being created does not
+/// exist yet, so its directory supplies the canonical form instead.
+#[must_use]
+pub fn sqlite_path(path: &Path) -> std::borrow::Cow<'_, Path> {
+    if !cfg!(windows) {
+        return std::borrow::Cow::Borrowed(path);
+    }
+    if let Ok(canonical) = path.canonicalize() {
+        return std::borrow::Cow::Owned(canonical);
+    }
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+        && let Ok(parent) = parent.canonicalize()
+    {
+        return std::borrow::Cow::Owned(parent.join(name));
+    }
+    std::borrow::Cow::Borrowed(path)
+}
+
 pub(crate) fn open_database(
     path: &Path,
     application_id: u32,
     expected_schema: &str,
     admission: Admission,
 ) -> Result<Connection, PackError> {
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let connection =
+        Connection::open_with_flags(sqlite_path(path), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.execute_batch("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;")?;
     let query_only: i64 = connection.query_row("PRAGMA query_only", [], |row| row.get(0))?;
     let actual_application_id: u32 =

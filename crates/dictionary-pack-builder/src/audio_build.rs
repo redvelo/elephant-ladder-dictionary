@@ -409,7 +409,7 @@ fn write_chunk(
     blobs: &BTreeMap<[u8; 32], &[u8]>,
 ) -> Result<(PackAsset, ChunkRoute), BuildError> {
     let temporary = directory.join(format!("chunk-{ordinal}.tmp"));
-    let connection = Connection::open(&temporary)?;
+    let connection = Connection::open(elephant_ladder_dictionary_pack::sqlite_path(&temporary))?;
     connection.execute_batch(AUDIO_CHUNK_SCHEMA)?;
     connection.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;")?;
     let blob_count = blobs.len() as u64;
@@ -571,7 +571,7 @@ fn write_index(
     built: &[Built],
     routes: &[ChunkRoute],
 ) -> Result<(), BuildError> {
-    let connection = Connection::open(path)?;
+    let connection = Connection::open(elephant_ladder_dictionary_pack::sqlite_path(path))?;
     connection.execute_batch(AUDIO_INDEX_SCHEMA)?;
     connection.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; BEGIN;")?;
     connection.execute(

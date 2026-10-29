@@ -154,7 +154,7 @@ impl AcquisitionState {
         let exists = path.exists();
         std::fs::create_dir_all(directory.join(ORIGINALS_DIRECTORY))
             .map_err(|source| io_error("create acquisition directory", directory, source))?;
-        let mut connection = Connection::open(&path)?;
+        let mut connection = Connection::open(elephant_ladder_dictionary_pack::sqlite_path(&path))?;
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         if exists {
             let state = Self {
@@ -219,7 +219,7 @@ impl AcquisitionState {
         }
         Ok(Self {
             directory: directory.to_owned(),
-            connection: Connection::open(path)?,
+            connection: Connection::open(elephant_ladder_dictionary_pack::sqlite_path(&path))?,
         })
     }
 
