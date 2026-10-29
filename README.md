@@ -5,6 +5,8 @@ the pack format, the tools that build packs from Wiktionary, and the catalog the
 application installs them from. Readers never see this repository; they install a
 language from the application's Dictionaries dialog and look words up offline.
 
+<img src="art/dictionaries-dialog.webp" alt="The Dictionaries dialog: languages installed from the catalog, with pronunciation recordings streamed from Wikimedia Commons or stored on the device">
+
 Each pack is one language's Wiktionary edition, extracted by
 [Wiktextract](https://github.com/tatuylonen/wiktextract) and published by
 [Kaikki](https://kaikki.org), kept whole: every selected record is stored byte for
@@ -14,6 +16,10 @@ bundled as Ogg Opus for offline use or fetched on demand.
 
 Seven languages are published: English, French, German, Spanish, Italian, Japanese, and
 Chinese, each with a monolingual view and a bilingual view to or from English.
+
+<img src="art/lookup-chinese.webp" alt="Looking up 妖怪 while reading Journey to the West: the entry's own quotations cite the novel being read">
+
+<img src="art/entry-pronunciations.webp" alt="The same entry's pronunciations: forty-seven transcriptions across Mandarin, Cantonese, Hakka, Min Nan, and Dungan">
 
 ## What is here
 
